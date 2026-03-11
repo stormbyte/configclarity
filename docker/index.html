@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docker Compose Auditor — Healthchecks, Secrets, Ports | ConfigClarity</title>
+  <meta name="description" content="Audit your Docker Compose files instantly. Detect missing healthchecks, hardcoded secrets, port collisions, and missing env vars. Free, no signup, runs in your browser.">
+  <meta name="keywords" content="docker compose checker, docker compose audit, docker healthcheck, docker secrets, docker port collision, docker compose validator">
+  <link rel="canonical" href="https://configclarity.dev/docker">
+  <meta property="og:title" content="Docker Compose Auditor — Healthchecks, Secrets, Ports | ConfigClarity">
+  <meta property="og:description" content="Paste your docker-compose.yml and instantly audit healthchecks, hardcoded secrets, port collisions and env vars.">
+  <meta property="og:url" content="https://configclarity.dev/docker">
+  <meta property="og:type" content="website">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Docker Compose Auditor",
+    "url": "https://configclarity.dev/docker",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "description": "Paste your docker-compose.yml and instantly audit healthchecks, hardcoded secrets, port collisions and env vars. Free, no signup, runs in your browser.",
+    "featureList": ["Healthcheck completeness", "Hardcoded secrets detection", "Port collision detection", "Env var bridge map"],
+    "provider": { "@type": "Organization", "name": "ConfigClarity", "url": "https://configclarity.dev" }
+  }
+  </script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1117;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .header {
+      position: relative;
+      padding: 1.5rem 1.5rem 1rem;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .tool-switcher {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      background: #10131f;
+      border-bottom: 1px solid #1e2236;
+      justify-content: center;
+    }
+    .tool-card {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #1e2236;
+      text-decoration: none;
+      color: #8a8fb5;
+      transition: all 0.15s;
+      min-width: 160px;
+    }
+    .tool-card:hover {
+      border-color: #6c63ff;
+      color: #e2e4f0;
+      background: #161924;
+    }
+    .tool-card.active {
+      border-color: #6c63ff;
+      background: #2a2650;
+      color: #fff;
+    }
+    .tool-icon { font-size: 1.25rem; }
+    .tool-name {
+      display: block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: inherit;
+    }
+    .tool-desc {
+      display: block;
+      font-size: 0.72rem;
+      color: #8a8fb5;
+      margin-top: 0.1rem;
+    }
+    .tool-card.active .tool-desc { color: #8b85ff; }
+    @media (max-width: 600px) {
+      .tool-switcher { gap: 0.4rem; padding: 0.5rem; }
+      .tool-card { min-width: unset; padding: 0.5rem 0.65rem; }
+      .tool-desc { display: none; }
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .header .subtitle {
+      margin: 0.5rem 0 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.95rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .header a {
+      color: #6c63ff;
+      text-decoration: none;
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+      display: inline-block;
+    }
+    .header a:hover { color: #8b83ff; text-decoration: underline; }
+    .main {
+      display: flex;
+      flex-direction: row;
+      flex: 1 0 auto;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) { .main { flex-direction: column; } }
+    .panel-left {
+      width: 42%;
+      min-width: 320px;
+      padding: 1rem 1.25rem;
+      background: #1e2130;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) {
+      .panel-left { width: 100%; border-right: none; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+    }
+    .panel-right {
+      width: 58%;
+      padding: 1rem 1.25rem;
+      background: #0f1117;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) { .panel-right { width: 100%; } }
+    .textarea-wrap { display: flex; flex-direction: column; gap: 8px; margin-bottom: 1rem; }
+    .textarea-wrap label { font-size: 0.875rem; color: rgba(255, 255, 255, 0.8); }
+    .textarea-wrap .optional { color: rgba(255, 255, 255, 0.5); font-size: 0.75rem; }
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      padding: 0.875rem 1rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #fff;
+      font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+    #compose-input {
+      min-height: 280px;
+    }
+    textarea::placeholder { color: rgba(255, 255, 255, 0.35); }
+    textarea:focus {
+      outline: none;
+      border-color: #6c63ff;
+      box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.25);
+    }
+    .button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 8px; }
+    .btn-audit {
+      padding: 0.625rem 1.25rem;
+      background: #6c63ff;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-audit:hover { background: #5a52e0; }
+    .btn-audit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-sample {
+      padding: 0.625rem 1.25rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-sample:hover { border-color: #6c63ff; color: #fff; }
+    .share-toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 201;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      color: #fff;
+      background: rgba(15, 17, 23, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      transition: opacity 0.2s ease;
+    }
+    .parse-error {
+      margin-top: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid #f43f5e;
+      border-radius: 6px;
+      color: #f87171;
+      font-size: 0.8125rem;
+    }
+    .audit-placeholder {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 1rem;
+      text-align: center;
+      padding: 2rem;
+    }
+    .audit-section {
+      margin-bottom: 1.5rem;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .audit-section-title {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .audit-section-body { padding: 1rem; }
+    .audit-list { list-style: none; margin: 0; padding: 0; }
+    .audit-list li {
+      padding: 0.35rem 0;
+      font-size: 0.875rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .audit-list li:last-child { border-bottom: none; }
+    .audit-list .badge { font-weight: 600; margin-right: 0.5rem; }
+    .audit-list .badge.red { color: #f43f5e; }
+    .audit-list .badge.orange { color: #f97316; }
+    .audit-list .badge.yellow { color: #eab308; }
+    .audit-list .badge.green { color: #10b981; }
+    .env-grid, .port-grid {
+      display: grid;
+      gap: 0.25rem;
+      font-size: 0.8125rem;
+      font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+    }
+    .env-grid { grid-template-columns: 1fr auto; align-items: center; }
+    .port-grid { grid-template-columns: auto 1fr; }
+    .env-var-row, .port-row { padding: 0.25rem 0.5rem; border-radius: 4px; }
+    .env-var-row.missing { background: rgba(244, 63, 94, 0.2); color: #f87171; }
+    .env-var-row.unused { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+    .env-var-row.ok { color: rgba(255, 255, 255, 0.8); }
+    .port-row.dup { background: rgba(244, 63, 94, 0.2); color: #f87171; }
+    .port-row.ok { color: rgba(255, 255, 255, 0.8); }
+    .audit-ok { color: #10b981; font-size: 0.875rem; }
+    .secrets-scan-card {
+      background: rgba(244, 63, 94, 0.1);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      border-left: 4px solid #f43f5e;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.875rem;
+    }
+    .secrets-scan-card:last-child { margin-bottom: 0; }
+    .secrets-scan-card-service { font-weight: 600; color: #fff; margin-bottom: 0.25rem; }
+    .secrets-scan-card-var { color: rgba(255, 255, 255, 0.9); margin-bottom: 0.15rem; }
+    .secrets-scan-card-value { font-size: 0.8125rem; color: #8a8fb5; font-family: ui-monospace, monospace; margin-bottom: 0.35rem; }
+    .secrets-scan-card-suggestion { font-size: 0.8125rem; color: #8a8fb5; }
+    .panel-placeholder {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 0.875rem;
+      margin: 0;
+    }
+    .faq { padding: 2rem 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+    .faq-heading { margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; text-align: center; }
+    .faq-list { max-width: 640px; margin: 0 auto; }
+    .faq-item { background: #1e2130; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+    .faq-item:last-child { margin-bottom: 0; }
+    .faq-question { padding: 1rem 1.25rem; font-size: 0.9375rem; font-weight: 600; color: rgba(255, 255, 255, 0.95); cursor: pointer; list-style: none; }
+    .faq-question::-webkit-details-marker { display: none; }
+    .faq-question::before { content: "+ "; color: #6c63ff; }
+    .faq-item[open] .faq-question::before { content: "− "; }
+    .faq-answer { margin: 0; padding: 0 1.25rem 1rem 1.25rem; font-size: 0.875rem; line-height: 1.55; color: rgba(255, 255, 255, 0.75); }
+    .site-footer {
+      text-align: center;
+      padding: 1.5rem;
+      border-top: 1px solid #1e2236;
+      margin-top: 2rem;
+    }
+    .privacy-note {
+      color: #8a8fb5;
+      font-size: 0.8125rem;
+      margin-bottom: 0.5rem;
+    }
+    .disclaimer-note {
+      color: #5a5f7a;
+      font-size: 0.75rem;
+      max-width: 680px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    .feedback-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 200;
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .feedback-btn:hover {
+      background: #5a52e0;
+    }
+
+    .feedback-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 201;
+      padding: 1rem;
+    }
+
+    .feedback-modal-overlay.visible {
+      display: flex;
+    }
+
+    .feedback-modal-panel {
+      position: relative;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .feedback-modal-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    .feedback-modal-close:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .feedback-modal-panel iframe {
+      display: block;
+      width: 480px;
+      height: 400px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>Docker Compose Auditor — Healthchecks, Secrets, Ports</h1>
+    <p class="subtitle">Paste your compose file. Audit healthchecks, secrets, port collisions and env vars instantly.</p>
+  </header>
+  <div class="tool-switcher">
+    <a href="/" class="tool-card">
+      <span class="tool-icon">🕐</span>
+      <span class="tool-info">
+        <span class="tool-name">Cron Builder & Visualiser</span>
+        <span class="tool-desc">Visualize job overlaps</span>
+      </span>
+    </a>
+    <a href="/ssl" class="tool-card">
+      <span class="tool-icon">🔒</span>
+      <span class="tool-info">
+        <span class="tool-name">SSL Checker</span>
+        <span class="tool-desc">Check cert expiry</span>
+      </span>
+    </a>
+    <a href="/docker" class="tool-card active">
+      <span class="tool-icon">🐳</span>
+      <span class="tool-info">
+        <span class="tool-name">Docker Auditor</span>
+        <span class="tool-desc">Audit compose files</span>
+      </span>
+    </a>
+    <a href="/firewall" class="tool-card">
+      <span class="tool-icon">🛡️</span>
+      <span class="tool-info">
+        <span class="tool-name">Firewall Auditor</span>
+        <span class="tool-desc">Audit UFW rules</span>
+      </span>
+    </a>
+    <a href="/proxy" class="tool-card">
+      <span class="tool-icon">🔀</span>
+      <span class="tool-info">
+        <span class="tool-name">Reverse Proxy Mapper</span>
+        <span class="tool-desc">Map routing & audit</span>
+      </span>
+    </a>
+  </div>
+
+  <main class="main">
+    <aside class="panel-left">
+      <div class="textarea-wrap">
+        <label for="compose-input">docker-compose.yml</label>
+        <textarea id="compose-input" placeholder="version: &#39;3.8&#39;&#10;services:&#10;  app:&#10;    image: myapp&#10;    depends_on:&#10;      db:&#10;        condition: service_healthy" aria-label="Paste docker-compose.yml content"></textarea>
+      </div>
+      <div class="textarea-wrap">
+        <label for="env-input">.env <span class="optional">(optional)</span></label>
+        <textarea id="env-input" placeholder="DB_HOST=db&#10;DB_PORT=5432&#10;REDIS_URL=redis://redis:6379" aria-label="Paste .env file content (optional)"></textarea>
+        <p class="cc-restore-notice" id="cc-restore-notice" aria-live="polite" style="display: none; color: #8a8fb5; font-size: 0.75rem; margin: 0.25rem 0 0;"></p>
+      </div>
+      <div class="button-row">
+        <button type="button" class="btn-audit" id="btn-audit" aria-label="Run audit">Audit</button>
+        <button type="button" class="btn-sample" id="btn-sample" aria-label="Load sample compose and .env">Sample config</button>
+        <button type="button" class="btn-sample" id="btn-share-url" aria-label="Copy shareable URL with compose content">Share URL</button>
+        <button type="button" class="btn-sample" id="btn-clear" aria-label="Clear input and results">Clear</button>
+      </div>
+      <div id="parse-error" class="parse-error" style="display: none;" role="alert"></div>
+    </aside>
+
+    <section class="panel-right">
+      <p class="audit-placeholder" id="audit-placeholder" style="display: none;">Paste your compose file and click Audit to see results.</p>
+      <div id="audit-results">
+        <div class="audit-section" id="panel-healthcheck">
+          <h2 class="audit-section-title">1. Healthcheck completeness</h2>
+          <div class="audit-section-body" id="healthcheck-body"><p class="panel-placeholder">Paste a compose file and click Audit</p></div>
+        </div>
+        <div class="audit-section" id="panel-env">
+          <h2 class="audit-section-title">2. Env var bridge map</h2>
+          <div class="audit-section-body" id="env-body"><p class="panel-placeholder">Paste a compose file and click Audit</p></div>
+        </div>
+        <div class="audit-section" id="panel-ports">
+          <h2 class="audit-section-title">3. Port collision grid</h2>
+          <div class="audit-section-body" id="ports-body"><p class="panel-placeholder">Paste a compose file and click Audit</p></div>
+        </div>
+        <div class="audit-section" id="panel-secrets">
+          <h2 class="audit-section-title">4. Secrets Scan</h2>
+          <div class="audit-section-body" id="secrets-body"><p class="panel-placeholder">Paste a compose file and click Audit</p></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section style="padding: 2rem 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); text-align: center;">
+    <h2 style="margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; font-family: 'JetBrains Mono', monospace;">How It Works</h2>
+    <div style="display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; max-width: 800px; margin: 0 auto;">
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">1. Paste</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Paste your docker-compose.yml — optionally add your .env file for full variable bridging.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">2. Audit</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Click Audit. The tool scans all services for missing healthchecks, hardcoded secrets, port collisions and missing env vars.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">3. Fix</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Each finding includes an explanation and a suggested fix. Nothing leaves your browser.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading" class="faq-heading">Frequently Asked Questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary class="faq-question">What does the Docker Compose Auditor check?</summary>
+        <p class="faq-answer">It scans your compose file for missing healthchecks, hardcoded secrets in environment blocks, port collisions, services bound to 0.0.0.0, and missing restart policies.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is a hardcoded secret in Docker?</summary>
+        <p class="faq-answer">A hardcoded secret is when you write a literal value like PASSWORD=mysecret directly in your compose file instead of using a variable reference like PASSWORD=${MY_SECRET}. Hardcoded secrets can be accidentally committed to version control.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Does this tool send my compose file anywhere?</summary>
+        <p class="faq-answer">No. Parsing happens entirely in your browser. Your compose file never leaves your machine.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is a port collision?</summary>
+        <p class="faq-answer">A port collision is when two services in the same compose file map to the same host port. Only one service can bind to a host port at a time — the second one will fail to start.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Does it support Docker Swarm or Kubernetes?</summary>
+        <p class="faq-answer">This tool is designed for docker-compose.yml files only. It does not support Swarm deploy configs or Kubernetes manifests.</p>
+      </details>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p class="privacy-note">
+      🔒 We do not store your pasted configs, domains, or IP address.
+      All processing happens entirely in your browser.
+    </p>
+    <p class="disclaimer-note">
+      ConfigClarity is provided "as is" without warranty of any kind.
+      This tool is for informational and planning purposes only.
+      Always verify your cron schedules independently before deploying
+      to production. ConfigClarity accepts no liability for scheduling
+      errors, server downtime, data loss, or any damages arising from
+      use of this tool.
+    </p>
+  </footer>
+
+  <script>
+    (function () {
+      const SHARED_COMPOSE = (function () {
+        try {
+          const p = new URLSearchParams(window.location.search);
+          const v = p.get('compose');
+          if (!v) return null;
+          return decodeURIComponent(escape(atob(v.replace(/ /g, '+'))));
+        } catch (_) { return null; }
+      })();
+
+      const MIN_INTERVAL_SEC = 10;
+      const MIN_START_PERIOD_SEC = 10;
+
+      const SAMPLE_COMPOSE = "version: '3.8'\nservices:\n  app:\n    image: myapp\n    depends_on:\n      db:\n        condition: service_healthy\n    environment:\n      - DB_HOST=${DB_HOST}\n      - SECRET_KEY=hardcodedpassword123\n    ports:\n      - \"8080:80\"\n  db:\n    image: postgres\n    ports:\n      - \"8080:5432\"";
+      const SAMPLE_ENV = "DB_HOST=db\nUNUSED_VAR=something";
+
+      const COMPOSE_KEY = 'cc-docker-compose';
+      const ENV_KEY = 'cc-docker-env';
+
+      const composeInput = document.getElementById('compose-input');
+      const envInput = document.getElementById('env-input');
+      const btnAudit = document.getElementById('btn-audit');
+      const btnSample = document.getElementById('btn-sample');
+      const btnShareUrl = document.getElementById('btn-share-url');
+      const btnClear = document.getElementById('btn-clear');
+      const parseError = document.getElementById('parse-error');
+      const auditPlaceholder = document.getElementById('audit-placeholder');
+      const auditResults = document.getElementById('audit-results');
+      const healthcheckBody = document.getElementById('healthcheck-body');
+      const envBody = document.getElementById('env-body');
+      const portsBody = document.getElementById('ports-body');
+      const secretsBody = document.getElementById('secrets-body');
+
+      function saveToStorage() {}
+
+      function loadFromStorage() {}
+
+      function parseCompose(yamlStr) {
+        if (typeof jsyaml === 'undefined') throw new Error('js-yaml not loaded');
+        return jsyaml.load(yamlStr);
+      }
+
+      function parseEnv(text) {
+        const vars = {};
+        (text || '').split('\n').forEach(function (line) {
+          line = line.trim();
+          if (!line || line.startsWith('#')) return;
+          const idx = line.indexOf('=');
+          if (idx === -1) return;
+          const key = line.slice(0, idx).trim();
+          const val = line.slice(idx + 1).trim();
+          vars[key] = val;
+        });
+        return vars;
+      }
+
+      function extractVarRefs(str) {
+        const refs = {};
+        if (typeof str !== 'string') return refs;
+        const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-)?[^}]*\}/g;
+        let m;
+        while ((m = re.exec(str)) !== null) refs[m[1]] = true;
+        return refs;
+      }
+
+      function extractVarRefsFromObj(obj, out) {
+        if (obj === null || obj === undefined) return;
+        if (typeof obj === 'string') {
+          Object.keys(extractVarRefs(obj)).forEach(function (k) { out[k] = true; });
+          return;
+        }
+        if (Array.isArray(obj)) {
+          obj.forEach(function (v) { extractVarRefsFromObj(v, out); });
+          return;
+        }
+        if (typeof obj === 'object') {
+          Object.keys(obj).forEach(function (k) {
+            extractVarRefsFromObj(obj[k], out);
+          });
+        }
+      }
+
+      function parseDurationToSec(s) {
+        if (typeof s !== 'string') return null;
+        const match = s.trim().match(/^(\d+)(s|m|h|d)?$/);
+        if (!match) return null;
+        const n = parseInt(match[1], 10);
+        const unit = (match[2] || 's').toLowerCase();
+        if (unit === 's') return n;
+        if (unit === 'm') return n * 60;
+        if (unit === 'h') return n * 3600;
+        if (unit === 'd') return n * 86400;
+        return n;
+      }
+
+      function getServices(compose) {
+        const raw = compose && compose.services;
+        if (!raw || typeof raw !== 'object') return {};
+        return raw;
+      }
+
+      function getDependsOnHealthy(serviceDef) {
+        const dep = serviceDef && serviceDef.depends_on;
+        if (!dep) return [];
+        const out = [];
+        if (Array.isArray(dep)) return [];
+        if (typeof dep === 'object') {
+          Object.keys(dep).forEach(function (name) {
+            const cond = dep[name];
+            const condition = cond && (cond.condition || (typeof cond === 'string' && cond));
+            if (condition === 'service_healthy') out.push(name);
+          });
+        }
+        return out;
+      }
+
+      function hasHealthcheck(serviceDef) {
+        const h = serviceDef && serviceDef.healthcheck;
+        return !!(h && (h.test || h.cmd));
+      }
+
+      function getHealthcheckInterval(serviceDef) {
+        const h = serviceDef && serviceDef.healthcheck;
+        if (!h || !h.interval) return null;
+        return parseDurationToSec(h.interval);
+      }
+
+      function getHealthcheckStartPeriod(serviceDef) {
+        const h = serviceDef && serviceDef.healthcheck;
+        if (!h || !h.start_period) return null;
+        return parseDurationToSec(h.start_period);
+      }
+
+      function getHealthcheckRetries(serviceDef) {
+        const h = serviceDef && serviceDef.healthcheck;
+        if (!h || h.retries == null) return 3;
+        const n = parseInt(h.retries, 10);
+        return isNaN(n) ? 3 : n;
+      }
+
+      function auditHealthcheck(services) {
+        const issues = [];
+        const names = Object.keys(services);
+
+        names.forEach(function (svcName) {
+          const def = services[svcName];
+          const needed = getDependsOnHealthy(def);
+          needed.forEach(function (depName) {
+            if (!services[depName]) return;
+            if (!hasHealthcheck(services[depName])) {
+              issues.push({
+                type: 'no_healthcheck',
+                severity: 'red',
+                message: 'Service "' + depName + '" has no healthcheck but is depended on with condition: service_healthy (by ' + svcName + ')'
+              });
+            }
+          });
+
+          if (!hasHealthcheck(def)) return;
+          const intervalSec = getHealthcheckInterval(def);
+          const startSec = getHealthcheckStartPeriod(def);
+          if (intervalSec !== null && intervalSec < MIN_INTERVAL_SEC) {
+            issues.push({
+              type: 'short_interval',
+              severity: 'orange',
+              message: 'Service "' + svcName + '" healthcheck interval (' + (intervalSec + 's') + ') is shorter than typical app startup (recommend ≥' + MIN_INTERVAL_SEC + 's)'
+            });
+          }
+          if (startSec !== null && startSec < MIN_START_PERIOD_SEC) {
+            issues.push({
+              type: 'short_start_period',
+              severity: 'orange',
+              message: 'Service "' + svcName + '" healthcheck start_period (' + startSec + 's) may be too short for app startup (recommend ≥' + MIN_START_PERIOD_SEC + 's)'
+            });
+          }
+          if (intervalSec !== null && (startSec === null || startSec === undefined) && intervalSec < MIN_START_PERIOD_SEC) {
+            issues.push({
+              type: 'no_start_period',
+              severity: 'orange',
+              message: 'Service "' + svcName + '" has no start_period; consider adding start_period (e.g. ' + MIN_START_PERIOD_SEC + 's) for app startup'
+            });
+          }
+          var retries = getHealthcheckRetries(def);
+          if (intervalSec !== null && intervalSec <= 30 && retries >= 3) {
+            issues.push({
+              type: 'restart_loop_risk',
+              severity: 'orange',
+              message: 'Service "' + svcName + '": Restart loop risk — healthcheck may fire before container is ready. Consider increasing interval or adding a start_period.'
+            });
+          }
+        });
+
+        return issues;
+      }
+
+      var SAFE_BOOLEANS = { 'true': true, 'false': true };
+      var SAFE_HOSTNAMES = { 'localhost': true, 'db': true, 'redis': true, 'postgres': true, 'api': true, 'web': true, 'app': true };
+
+      function isSafeLiteral(val) {
+        if (!val || typeof val !== 'string') return true;
+        var s = val.trim();
+        if (!s) return true;
+        if (SAFE_BOOLEANS[s.toLowerCase()]) return true;
+        if (s === '1' || s === '0') return true;
+        if (/^\d+$/.test(s)) return true;
+        if (SAFE_HOSTNAMES[s.toLowerCase()]) return true;
+        return false;
+      }
+
+      function getServiceEnvPairs(serviceDef) {
+        const pairs = [];
+        const env = serviceDef && serviceDef.environment;
+        if (!env) return pairs;
+        if (Array.isArray(env)) {
+          env.forEach(function (entry) {
+            if (typeof entry !== 'string') return;
+            const eq = entry.indexOf('=');
+            if (eq <= 0) return;
+            const key = entry.slice(0, eq).trim();
+            const value = entry.slice(eq + 1).trim();
+            pairs.push({ key: key, value: value });
+          });
+        } else if (typeof env === 'object') {
+          Object.keys(env).forEach(function (key) {
+            var v = env[key];
+            pairs.push({ key: key, value: v == null ? '' : String(v) });
+          });
+        }
+        return pairs;
+      }
+
+      function auditHardcodedSecrets(services) {
+        const out = [];
+        Object.keys(services).forEach(function (svcName) {
+          getServiceEnvPairs(services[svcName]).forEach(function (p) {
+            var val = (p.value || '').trim();
+            if (!val || val.indexOf('${') >= 0) return;
+            if (isSafeLiteral(val)) return;
+            out.push({ service: svcName, key: p.key, value: val });
+          });
+        });
+        return out;
+      }
+
+      var SECRETS_SCAN_KEYWORDS = ['PASSWORD', 'PASS', 'SECRET', 'API_KEY', 'TOKEN', 'AUTH', 'CREDENTIAL', 'PRIVATE_KEY', 'ACCESS_KEY'];
+      var SECRETS_IGNORE_VALUES = { 'true': true, 'false': true, '1': true, '0': true, 'yes': true, 'no': true };
+
+      function isSensitiveKey(key) {
+        if (!key || typeof key !== 'string') return false;
+        var k = key.toUpperCase();
+        return SECRETS_SCAN_KEYWORDS.some(function (kw) { return k.indexOf(kw) >= 0; });
+      }
+
+      function secretsScan(services) {
+        const out = [];
+        Object.keys(services).forEach(function (svcName) {
+          getServiceEnvPairs(services[svcName]).forEach(function (p) {
+            if (!isSensitiveKey(p.key)) return;
+            var val = (p.value || '').trim();
+            if (!val || val.indexOf('${') >= 0) return;
+            if (SECRETS_IGNORE_VALUES[val.toLowerCase()]) return;
+            out.push({ service: svcName, key: p.key, value: val });
+          });
+        });
+        return out;
+      }
+
+      function maskSecretValue(val) {
+        if (!val || val.length <= 2) return '***';
+        return val.slice(0, 2) + '***';
+      }
+
+      function auditEnv(composeStr, composeObj, envVars) {
+        const refs = {};
+        extractVarRefsFromObj(composeObj, refs);
+        const refList = Object.keys(refs);
+        const envList = Object.keys(envVars);
+
+        const missing = refList.filter(function (r) { return !Object.prototype.hasOwnProperty.call(envVars, r); });
+        const unused = envList.filter(function (e) { return !refs[e]; });
+
+        return { missing: missing, unused: unused, used: refList.filter(function (r) { return envVars[r] !== undefined; }) };
+      }
+
+      function getHostPorts(services) {
+        const list = [];
+        Object.keys(services).forEach(function (svcName) {
+          const def = services[svcName];
+          const ports = def && def.ports;
+          if (!ports || !Array.isArray(ports)) return;
+          ports.forEach(function (p) {
+            let hostPort = null;
+            let spec = '';
+            let host = null;
+            let binding = null;
+            if (typeof p === 'string') {
+              spec = p;
+              const parts = p.split(':');
+              if (parts.length === 3) {
+                host = parts[0].trim();
+                hostPort = parts[1].trim();
+              } else if (parts.length >= 2) {
+                hostPort = parts[0].trim();
+              } else if (parts.length === 1 && /^\d+$/.test(parts[0].trim())) {
+                hostPort = parts[0].trim();
+              }
+            } else if (p && (p.published != null || p.target != null)) {
+              const pub = p.published;
+              binding = (p.host_ip != null ? p.host_ip : (p.host != null ? p.host : null));
+              if (typeof pub === 'string' && pub.indexOf(':') >= 0) {
+                const hostPart = pub.split(':')[0].trim();
+                if (hostPart && hostPart !== '') host = hostPart;
+              } else if (binding != null) host = String(binding);
+              spec = (pub != null ? pub : '?') + ':' + (p.target != null ? p.target : '?');
+              if (pub != null) hostPort = String(pub).split('/')[0].split(':').pop().trim();
+            }
+            if (hostPort && /^\d+$/.test(hostPort)) list.push({ port: hostPort, hostPort: hostPort, raw: spec, service: svcName, spec: spec, host: host != null ? host : undefined, binding: binding != null ? binding : undefined });
+          });
+        });
+        return list;
+      }
+
+      function auditPorts(portList) {
+        const byPort = {};
+        portList.forEach(function (p) {
+          const port = p.port;
+          if (!byPort[port]) byPort[port] = [];
+          byPort[port].push(p);
+        });
+        const duplicates = Object.keys(byPort).filter(function (port) { return byPort[port].length > 1; });
+        return { byPort: byPort, duplicates: duplicates };
+      }
+
+      function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s == null ? '' : String(s);
+        return div.innerHTML;
+      }
+
+      function renderHealthcheck(issues) {
+        if (issues.length === 0) {
+          healthcheckBody.innerHTML = '<p class="audit-ok">✓ No healthcheck issues found.</p>';
+          return;
+        }
+        const ul = document.createElement('ul');
+        ul.className = 'audit-list';
+        issues.forEach(function (i) {
+          const li = document.createElement('li');
+          li.innerHTML = '<span class="badge ' + i.severity + '">' + (i.severity === 'red' ? '⚠' : '◐') + '</span>' + escapeHtml(i.message);
+          ul.appendChild(li);
+        });
+        healthcheckBody.innerHTML = '';
+        healthcheckBody.appendChild(ul);
+      }
+
+      function renderEnv(missing, unused, used, hardcoded) {
+        hardcoded = hardcoded || [];
+        if (missing.length === 0 && unused.length === 0 && hardcoded.length === 0) {
+          envBody.innerHTML = '<p class="audit-ok">✓ All referenced vars are in .env; no unused .env vars; no hardcoded secrets.</p>';
+          return;
+        }
+        envBody.innerHTML = '';
+        if (hardcoded.length > 0) {
+          const ul = document.createElement('ul');
+          ul.className = 'audit-list';
+          hardcoded.forEach(function (h) {
+            const li = document.createElement('li');
+            li.innerHTML = '<span class="badge red">CRITICAL</span> ' + escapeHtml(h.key) + ' is hardcoded value (' + escapeHtml(h.value) + ') in service "' + escapeHtml(h.service) + '"';
+            ul.appendChild(li);
+          });
+          envBody.appendChild(ul);
+        }
+        if (missing.length > 0 || unused.length > 0) {
+          const grid = document.createElement('div');
+          grid.className = 'env-grid';
+          if (hardcoded.length > 0) grid.style.marginTop = '1rem';
+          missing.forEach(function (v) {
+            const row = document.createElement('div');
+            row.className = 'env-var-row missing';
+            row.textContent = v;
+            const label = document.createElement('div');
+            label.textContent = 'Missing in .env';
+            label.style.color = 'rgba(255,255,255,0.6)';
+            grid.appendChild(row);
+            grid.appendChild(label);
+          });
+          unused.forEach(function (v) {
+            const row = document.createElement('div');
+            row.className = 'env-var-row unused';
+            row.textContent = v;
+            const label = document.createElement('div');
+            label.textContent = 'Unused in compose';
+            label.style.color = 'rgba(255,255,255,0.6)';
+            grid.appendChild(row);
+            grid.appendChild(label);
+          });
+          envBody.appendChild(grid);
+        }
+      }
+
+      function renderPorts(portList, duplicates) {
+        const dupSet = {};
+        duplicates.forEach(function (p) { dupSet[p] = true; });
+        if (portList.length === 0) {
+          portsBody.innerHTML = '<p class="audit-ok">No host ports mapped.</p>';
+          return;
+        }
+        const grid = document.createElement('div');
+        grid.className = 'port-grid';
+        portList.forEach(function (p) {
+          const row = document.createElement('div');
+          row.className = 'port-row ' + (dupSet[p.port] ? 'dup' : 'ok');
+          row.textContent = p.port;
+          const spec = document.createElement('div');
+          spec.textContent = p.service + ' → ' + p.spec;
+          spec.style.color = 'rgba(255,255,255,0.8)';
+          grid.appendChild(row);
+          grid.appendChild(spec);
+        });
+        portsBody.innerHTML = '';
+        portsBody.appendChild(grid);
+        if (duplicates.length > 0) {
+          const warn = document.createElement('p');
+          warn.style.color = '#f87171';
+          warn.style.fontSize = '0.8125rem';
+          warn.style.marginTop = '0.5rem';
+          warn.textContent = 'Duplicate host ports: ' + duplicates.join(', ');
+          portsBody.appendChild(warn);
+        }
+        const zeroBindings = portList.filter(function (p) {
+          const raw = p.raw || '';
+          return raw.startsWith('0.0.0.0:') || raw.indexOf('"0.0.0.0:') >= 0;
+        });
+        if (zeroBindings.length > 0) {
+          const portNums = zeroBindings.map(function (p) { return p.hostPort; }).join(', ');
+          const warn = document.createElement('p');
+          warn.style.color = '#f97316';
+          warn.style.marginTop = '0.5rem';
+          warn.style.fontSize = '0.8125rem';
+          warn.textContent = '\u26A0 Ports ' + portNums + ' are bound to 0.0.0.0 — exposed on all network interfaces. Consider binding to 127.0.0.1 for internal services.';
+          portsBody.appendChild(warn);
+        }
+      }
+
+      function renderSecrets(list) {
+        secretsBody.innerHTML = '';
+        if (list.length === 0) {
+          secretsBody.innerHTML = '<p class="audit-ok">✓ No hardcoded secrets detected.</p>';
+          return;
+        }
+        list.forEach(function (item) {
+          const card = document.createElement('div');
+          card.className = 'secrets-scan-card';
+          const masked = maskSecretValue(item.value);
+          card.innerHTML =
+            '<div class="secrets-scan-card-service">' + escapeHtml(item.service) + '</div>' +
+            '<div class="secrets-scan-card-var">' + escapeHtml(item.key) + ' <span class="badge red">CRITICAL</span></div>' +
+            '<div class="secrets-scan-card-value">Value: ' + escapeHtml(masked) + '</div>' +
+            '<div class="secrets-scan-card-suggestion">Use ${VAR_NAME} and store the value in a .env file.</div>';
+          secretsBody.appendChild(card);
+        });
+      }
+
+      function runAudit() {
+        parseError.style.display = 'none';
+        parseError.textContent = '';
+
+        const composeStr = composeInput.value.trim();
+        if (!composeStr) {
+          auditPlaceholder.style.display = 'block';
+          auditResults.style.display = 'none';
+          return;
+        }
+
+        let compose;
+        try {
+          compose = parseCompose(composeStr);
+        } catch (e) {
+          parseError.textContent = 'YAML parse error: ' + (e.message || String(e));
+          parseError.style.display = 'block';
+          auditPlaceholder.style.display = 'block';
+          auditResults.style.display = 'none';
+          return;
+        }
+
+        const services = getServices(compose);
+        const envVars = parseEnv(envInput.value);
+
+        const healthcheckIssues = auditHealthcheck(services);
+        const envAudit = auditEnv(composeStr, compose, envVars);
+        const hardcodedSecrets = auditHardcodedSecrets(services);
+        const portList = getHostPorts(services);
+        const portAudit = auditPorts(portList);
+
+        renderHealthcheck(healthcheckIssues);
+        renderEnv(envAudit.missing, envAudit.unused, envAudit.used, hardcodedSecrets);
+        renderPorts(portList, portAudit.duplicates);
+        renderSecrets(secretsScan(services));
+
+        auditPlaceholder.style.display = 'none';
+        auditResults.style.display = 'block';
+      }
+
+      function loadSampleConfig() {
+        composeInput.value = SAMPLE_COMPOSE;
+        envInput.value = SAMPLE_ENV;
+        saveToStorage();
+      }
+
+      btnAudit.addEventListener('click', runAudit);
+      btnSample.addEventListener('click', loadSampleConfig);
+      btnClear.addEventListener('click', function () {
+        composeInput.value = '';
+        envInput.value = '';
+        parseError.style.display = 'none';
+        parseError.textContent = '';
+        healthcheckBody.innerHTML = '<p class="panel-placeholder">Paste a compose file and click Audit</p>';
+        envBody.innerHTML = '<p class="panel-placeholder">Paste a compose file and click Audit</p>';
+        portsBody.innerHTML = '<p class="panel-placeholder">Paste a compose file and click Audit</p>';
+        secretsBody.innerHTML = '<p class="panel-placeholder">Paste a compose file and click Audit</p>';
+      });
+
+      var saveTimer;
+      function debouncedSave() {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () { saveToStorage(); saveTimer = null; }, 500);
+      }
+      composeInput.addEventListener('input', debouncedSave);
+      envInput.addEventListener('input', debouncedSave);
+
+      function initFromUrl() {
+        if (SHARED_COMPOSE) {
+          composeInput.value = SHARED_COMPOSE;
+          return;
+        }
+        loadFromStorage();
+      }
+      if (btnShareUrl) {
+        btnShareUrl.addEventListener('click', function () {
+          try {
+            const value = composeInput.value.trim();
+            const encoded = value ? btoa(unescape(encodeURIComponent(value))) : '';
+            const url = value
+              ? window.location.origin + (location.pathname || '/docker') + '?compose=' + encodeURIComponent(encoded)
+              : window.location.origin + (location.pathname || '/docker');
+            navigator.clipboard.writeText(url).then(function () {
+              const toast = document.getElementById('share-toast');
+              if (toast) {
+                toast.textContent = 'URL copied to clipboard';
+                toast.hidden = false;
+                if (window._shareToastTimeout) clearTimeout(window._shareToastTimeout);
+                window._shareToastTimeout = setTimeout(function () {
+                  toast.hidden = true;
+                  window._shareToastTimeout = null;
+                }, 2000);
+              }
+            }).catch(function () {});
+          } catch (e) {}
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initFromUrl);
+      } else {
+        initFromUrl();
+      }
+    })();
+
+    const feedbackBtn = document.getElementById('feedback-btn');
+    const feedbackModal = document.getElementById('feedback-modal');
+    const feedbackModalPanel = document.getElementById('feedback-modal-panel');
+    const feedbackModalClose = document.getElementById('feedback-modal-close');
+    function closeFeedbackModal() {
+      if (feedbackModal) {
+        feedbackModal.classList.remove('visible');
+        feedbackModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (feedbackBtn && feedbackModal) {
+      feedbackBtn.addEventListener('click', function () {
+        feedbackModal.classList.add('visible');
+        feedbackModal.setAttribute('aria-hidden', 'false');
+        feedbackModalClose?.focus();
+      });
+    }
+    if (feedbackModalClose && feedbackModal) {
+      feedbackModalClose.addEventListener('click', closeFeedbackModal);
+    }
+    if (feedbackModal && feedbackModalPanel) {
+      feedbackModal.addEventListener('click', function (e) {
+        if (e.target === feedbackModal) closeFeedbackModal();
+      });
+      feedbackModal.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeFeedbackModal();
+      });
+    }
+  </script>
+  <div id="share-toast" class="share-toast" aria-live="polite" hidden>URL copied to clipboard</div>
+  <button type="button" class="feedback-btn" id="feedback-btn" aria-label="Send feedback">💬 Feedback</button>
+  <div class="feedback-modal-overlay" id="feedback-modal" role="dialog" aria-modal="true" aria-label="Feedback form" aria-hidden="true">
+    <div class="feedback-modal-panel" id="feedback-modal-panel">
+      <button type="button" class="feedback-modal-close" id="feedback-modal-close" aria-label="Close">×</button>
+      <iframe src="https://tally.so/embed/Y5Zx15" title="Feedback form" width="480" height="400"></iframe>
+    </div>
+  </div>
+<div style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;" aria-hidden="true">
+  Docker Compose Auditor — free online tool. Validate docker-compose.yml files instantly.
+  Detect missing healthchecks, hardcoded passwords and API keys, duplicate host port mappings,
+  and undefined environment variables. Docker Compose linter and validator.
+  Audit docker-compose.yml for secrets. Check Docker healthcheck configuration.
+  Find port conflicts in Docker Compose. All processing runs client-side in your browser —
+  no data is sent to any server. Free Docker Compose checker with no signup required.
+</div>
+</body>
+</html>

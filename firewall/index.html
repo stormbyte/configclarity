@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UFW Firewall Auditor — Port & Rule Checker | ConfigClarity</title>
+  <meta property="og:title" content="UFW Firewall Auditor — Port & Rule Checker | ConfigClarity">
+  <meta property="og:description" content="Paste your UFW status output and instantly audit high-risk ports, missing default-deny, conflicting rules and overly broad CIDR ranges.">
+  <meta property="og:url" content="https://configclarity.dev/firewall">
+  <meta property="og:type" content="website">
+  <meta name="description" content="Paste 'sudo ufw status verbose' output. See traffic funnel and audit findings: high-risk ports, conflicts, IPv4/IPv6 mismatch, and more. Client-side only.">
+  <meta name="keywords" content="ufw firewall checker, ufw audit tool, firewall rule checker, ufw status verbose, linux firewall audit, open port checker, ufw default deny, firewall security audit">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "UFW Firewall Auditor",
+    "url": "https://configclarity.dev/firewall",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "description": "Paste sudo ufw status verbose output and instantly audit high-risk ports, missing default-deny, conflicting rules and IPv4/IPv6 mismatches. Free, runs in your browser.",
+    "featureList": ["High-risk port detection", "Default-deny check", "Conflicting rule detection", "IPv4/IPv6 mismatch detection", "Traffic funnel visualisation"],
+    "provider": { "@type": "Organization", "name": "ConfigClarity", "url": "https://configclarity.dev" }
+  }
+  </script>
+  <link rel="canonical" href="https://configclarity.dev/firewall">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+  <style>
+    :root {
+      --bg: #0b0d14;
+      --purple: #6c63ff;
+      --green: #22c55e;
+      --orange: #f97316;
+      --red: #ef4444;
+      --text: #e2e4f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1117;
+      color: var(--text);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      line-height: 1.5;
+    }
+    .header {
+      padding: 1.5rem 1.5rem 1rem;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .header .subtitle {
+      margin: 0.5rem 0 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.95rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .tool-switcher {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      background: #10131f;
+      border-bottom: 1px solid #1e2236;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .tool-card {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #1e2236;
+      text-decoration: none;
+      color: #8a8fb5;
+      transition: all 0.15s;
+      min-width: 140px;
+    }
+    .tool-card:hover {
+      border-color: var(--purple);
+      color: var(--text);
+      background: #161924;
+    }
+    .tool-card.active {
+      border-color: var(--purple);
+      background: #2a2650;
+      color: #fff;
+    }
+    .tool-icon { font-size: 1.25rem; }
+    .tool-name {
+      display: block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: inherit;
+    }
+    .tool-desc {
+      display: block;
+      font-size: 0.72rem;
+      color: #8a8fb5;
+      margin-top: 0.1rem;
+    }
+    .tool-card.active .tool-desc { color: #8b85ff; }
+    @media (max-width: 700px) {
+      .tool-switcher { gap: 0.4rem; padding: 0.5rem; }
+      .tool-card { min-width: unset; padding: 0.5rem 0.65rem; }
+      .tool-desc { display: none; }
+    }
+    .main {
+      display: flex;
+      flex-direction: row;
+      flex: 1 0 auto;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) { .main { flex-direction: column; } }
+    .panel-left {
+      width: 40%;
+      min-width: 280px;
+      padding: 1rem 1.25rem;
+      background: #1e2130;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) {
+      .panel-left { width: 100%; border-right: none; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+    }
+    .panel-right {
+      width: 60%;
+      padding: 1rem 1.25rem;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) { .panel-right { width: 100%; } }
+    .textarea-wrap { display: flex; flex-direction: column; gap: 8px; margin-bottom: 1rem; }
+    .textarea-wrap label { font-size: 0.875rem; color: rgba(255, 255, 255, 0.8); }
+    textarea {
+      width: 100%;
+      min-height: 280px;
+      padding: 0.875rem 1rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #fff;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+    textarea::placeholder { color: rgba(255, 255, 255, 0.35); }
+    textarea:focus {
+      outline: none;
+      border-color: var(--purple);
+      box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.25);
+    }
+    .button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 8px; }
+    .btn-audit {
+      padding: 0.625rem 1.25rem;
+      background: var(--purple);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-audit:hover { background: #5a52e0; }
+    .btn-sample {
+      padding: 0.625rem 1.25rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-sample:hover { border-color: var(--purple); color: #fff; }
+    .share-toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 201;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      color: #fff;
+      background: rgba(15, 17, 23, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      transition: opacity 0.2s ease;
+    }
+    .placeholder-msg {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 1rem;
+      text-align: center;
+      padding: 2rem;
+    }
+    .funnel-section, .audit-section {
+      margin-bottom: 1.5rem;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .section-title {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .section-body { padding: 1rem; }
+    .funnel-diagram {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      min-height: 120px;
+      font-size: 0.8125rem;
+    }
+    .funnel-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      margin: 0 2px;
+      min-width: 0;
+    }
+    .funnel-col-title {
+      padding: 0.5rem 0.6rem;
+      background: rgba(0, 0, 0, 0.25);
+      font-weight: 600;
+      color: #8a8fb5;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .funnel-col-body {
+      flex: 1;
+      padding: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      overflow-y: auto;
+    }
+    .funnel-node {
+      padding: 0.35rem 0.5rem;
+      border-radius: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .funnel-node.source { background: rgba(108, 99, 255, 0.15); color: #a5a0ff; }
+    .funnel-node.port { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+    .funnel-node.allow { background: rgba(34, 197, 94, 0.2); color: var(--green); }
+    .funnel-node.deny { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .funnel-flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      align-items: center;
+      padding: 0.25rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .funnel-flow:last-child { border-bottom: none; }
+    .funnel-arrow { color: #5a5f7a; font-size: 0.7rem; }
+    .finding-card {
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      border-radius: 8px;
+      border-left: 4px solid;
+      font-size: 0.875rem;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .finding-card:last-child { margin-bottom: 0; }
+    .finding-card.critical { border-left-color: var(--red); }
+    .finding-card.warning { border-left-color: var(--orange); }
+    .finding-card.info { border-left-color: var(--purple); }
+    .finding-card.ok { border-left-color: var(--green); }
+    .finding-title { font-weight: 600; margin-bottom: 0.25rem; }
+    .finding-card.critical .finding-title { color: var(--red); }
+    .finding-card.warning .finding-title { color: var(--orange); }
+    .finding-card.info .finding-title { color: var(--purple); }
+    .finding-card.ok .finding-title { color: var(--green); }
+    .finding-detail { color: #8a8fb5; font-size: 0.8125rem; }
+    .audit-ok-msg { color: var(--green); font-size: 0.875rem; padding: 0.5rem 0; }
+    .faq { padding: 2rem 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+    .faq-heading { margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; text-align: center; }
+    .faq-list { max-width: 640px; margin: 0 auto; }
+    .faq-item { background: #1e2130; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+    .faq-item:last-child { margin-bottom: 0; }
+    .faq-question { padding: 1rem 1.25rem; font-size: 0.9375rem; font-weight: 600; color: rgba(255, 255, 255, 0.95); cursor: pointer; list-style: none; }
+    .faq-question::-webkit-details-marker { display: none; }
+    .faq-question::before { content: "+ "; color: var(--purple); }
+    .faq-item[open] .faq-question::before { content: "− "; }
+    .faq-answer { margin: 0; padding: 0 1.25rem 1rem 1.25rem; font-size: 0.875rem; line-height: 1.55; color: rgba(255, 255, 255, 0.75); }
+    .site-footer {
+      text-align: center;
+      padding: 1.5rem;
+      border-top: 1px solid #1e2236;
+      margin-top: 2rem;
+    }
+    .privacy-note {
+      color: #8a8fb5;
+      font-size: 0.8125rem;
+      margin-bottom: 0.5rem;
+    }
+    .disclaimer-note {
+      color: #5a5f7a;
+      font-size: 0.75rem;
+      max-width: 680px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    .feedback-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 200;
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .feedback-btn:hover {
+      background: #5a52e0;
+    }
+
+    .feedback-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 201;
+      padding: 1rem;
+    }
+
+    .feedback-modal-overlay.visible {
+      display: flex;
+    }
+
+    .feedback-modal-panel {
+      position: relative;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .feedback-modal-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    .feedback-modal-close:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .feedback-modal-panel iframe {
+      display: block;
+      width: 480px;
+      height: 400px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>UFW Firewall Auditor — Port & Rule Checker</h1>
+    <p class="subtitle">Paste <code>sudo ufw status verbose</code>. See traffic funnel and audit findings.</p>
+  </header>
+  <div class="tool-switcher">
+    <a href="/" class="tool-card">
+      <span class="tool-icon">🕐</span>
+      <span class="tool-info">
+        <span class="tool-name">Cron Builder & Visualiser</span>
+        <span class="tool-desc">Visualize job overlaps</span>
+      </span>
+    </a>
+    <a href="/ssl" class="tool-card">
+      <span class="tool-icon">🔒</span>
+      <span class="tool-info">
+        <span class="tool-name">SSL Checker</span>
+        <span class="tool-desc">Check cert expiry</span>
+      </span>
+    </a>
+    <a href="/docker" class="tool-card">
+      <span class="tool-icon">🐳</span>
+      <span class="tool-info">
+        <span class="tool-name">Docker Auditor</span>
+        <span class="tool-desc">Audit compose files</span>
+      </span>
+    </a>
+    <a href="/firewall" class="tool-card active">
+      <span class="tool-icon">🛡️</span>
+      <span class="tool-info">
+        <span class="tool-name">Firewall Auditor</span>
+        <span class="tool-desc">Audit UFW rules</span>
+      </span>
+    </a>
+    <a href="/proxy" class="tool-card">
+      <span class="tool-icon">🔀</span>
+      <span class="tool-info">
+        <span class="tool-name">Reverse Proxy Mapper</span>
+        <span class="tool-desc">Map routing & audit</span>
+      </span>
+    </a>
+  </div>
+
+  <main class="main">
+    <aside class="panel-left">
+      <div class="textarea-wrap">
+        <label for="ufw-input">UFW status verbose output</label>
+        <textarea id="ufw-input" placeholder="Paste output of: sudo ufw status verbose" aria-label="UFW status verbose output"></textarea>
+        <p class="cc-restore-notice" id="cc-restore-notice" aria-live="polite" style="display: none; color: #8a8fb5; font-size: 0.75rem; margin: 0.25rem 0 0;"></p>
+      </div>
+      <div class="button-row">
+        <button type="button" class="btn-audit" id="btn-audit" aria-label="Run firewall audit">Audit</button>
+        <button type="button" class="btn-sample" id="btn-sample" aria-label="Load sample UFW output">Sample input</button>
+        <button type="button" class="btn-sample" id="btn-share-url" aria-label="Copy shareable URL with UFW output">Share URL</button>
+        <button type="button" class="btn-sample" id="btn-clear" aria-label="Clear input and results">Clear</button>
+      </div>
+    </aside>
+
+    <section class="panel-right">
+      <p class="placeholder-msg" id="placeholder">Paste your <code>ufw status verbose</code> output and click Audit.</p>
+      <div id="results" style="display: none;">
+        <div class="funnel-section">
+          <h2 class="section-title">Traffic Funnel</h2>
+          <div class="section-body">
+            <div id="funnel-diagram" class="funnel-diagram"></div>
+          </div>
+        </div>
+        <div class="audit-section">
+          <h2 class="section-title">Audit findings</h2>
+          <div class="section-body" id="audit-findings"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section style="padding: 2rem 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); text-align: center;">
+    <h2 style="margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; font-family: 'JetBrains Mono', monospace;">How It Works</h2>
+    <div style="display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; max-width: 800px; margin: 0 auto;">
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">1. Run</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Run <code>sudo ufw status verbose</code> on your server and copy the full output.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">2. Paste</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Paste it into the tool and click Audit. The traffic funnel and audit findings appear instantly.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">3. Harden</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Review findings for high-risk open ports, missing default-deny, and IPv4/IPv6 mismatches. Nothing leaves your browser.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading" class="faq-heading">Frequently Asked Questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary class="faq-question">How do I get my UFW status output?</summary>
+        <p class="faq-answer">Run <code>sudo ufw status verbose</code> in your terminal and paste the full output into the tool.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is a high-risk port?</summary>
+        <p class="faq-answer">High-risk ports are commonly targeted by automated scanners and attackers. This tool flags ports 22 (SSH), 23 (Telnet), 3389 (RDP), 5432 (PostgreSQL), 3306 (MySQL), 6379 (Redis), and 27017 (MongoDB) when open to Anywhere.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What does missing default-deny mean?</summary>
+        <p class="faq-answer">UFW should block all incoming traffic by default unless explicitly allowed. If your default policy is allow, any port not covered by a rule is open to the internet.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is an IPv4/IPv6 mismatch?</summary>
+        <p class="faq-answer">If you allow a port for IPv4 but not IPv6 (or vice versa), traffic on the uncovered protocol can bypass your rules. This tool flags ports where one protocol is covered and the other is not.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Does this tool store my firewall rules?</summary>
+        <p class="faq-answer">No. All processing happens in your browser. Your UFW output is never sent to or stored on any ConfigClarity server.</p>
+      </details>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p class="privacy-note">
+      🔒 We do not store your pasted configs or IP address.
+      All processing happens entirely in your browser.
+    </p>
+    <p class="disclaimer-note">
+      ConfigClarity is provided "as is" without warranty of any kind.
+      This tool is for informational and planning purposes only.
+      Always verify firewall rules independently before deploying
+      to production. ConfigClarity accepts no liability for
+      security misconfigurations, downtime, or any damages arising
+      from use of this tool.
+    </p>
+  </footer>
+
+  <script>
+  (function () {
+    const SHARED_UFW = (function () {
+      try {
+        const p = new URLSearchParams(window.location.search);
+        const v = p.get('ufw');
+        if (!v) return null;
+        return decodeURIComponent(escape(atob(v.replace(/ /g, '+'))));
+      } catch (_) { return null; }
+    })();
+
+    const HIGH_RISK_PORTS = [22, 23, 3389, 5432, 3306, 6379, 27017];
+    const SAMPLE_INPUT = `Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW IN    Anywhere
+80/tcp                     ALLOW IN    Anywhere
+443/tcp                    ALLOW IN    Anywhere
+5432/tcp                   ALLOW IN    Anywhere
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+80/tcp (v6)                ALLOW IN    Anywhere (v6)
+443/tcp (v6)               ALLOW IN    Anywhere (v6)
+`;
+
+    const UFW_KEY = 'cc-firewall-ufw';
+    const input = document.getElementById('ufw-input');
+    const btnAudit = document.getElementById('btn-audit');
+    const btnSample = document.getElementById('btn-sample');
+    const placeholder = document.getElementById('placeholder');
+    const resultsEl = document.getElementById('results');
+    const funnelEl = document.getElementById('funnel-diagram');
+    const findingsEl = document.getElementById('audit-findings');
+
+    function saveToStorage() {}
+    function loadFromStorage() {}
+
+    function parseUfwOutput(text) {
+      const lines = text.split(/\r?\n/);
+      const result = {
+        defaultIncoming: null,
+        defaultOutgoing: null,
+        rules: [],
+        rawLines: lines,
+        hasStatusLine: false,
+        statusInactive: false,
+        unparseable: false
+      };
+      let inTable = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/Status:\s*(active|inactive)/i.test(line)) result.hasStatusLine = true;
+        if (/Status:\s*inactive/i.test(line)) result.statusInactive = true;
+        const defaultMatch = line.match(/Default:\s*(\w+)\s*\(incoming\)\s*,\s*(\w+)\s*\(outgoing\)/i);
+        if (defaultMatch) {
+          result.defaultIncoming = defaultMatch[1].toLowerCase();
+          result.defaultOutgoing = defaultMatch[2].toLowerCase();
+        }
+        if (/^\s*To\s+Action\s+From/i.test(line) || /^--\s+------\s+----/i.test(line)) {
+          inTable = true;
+          continue;
+        }
+        if (inTable) {
+          const ruleMatch = line.match(/^(\S+(?:\s*\(v6\))?)\s+(ALLOW|DENY)\s+(IN|OUT)\s*(.*)$/i);
+          if (ruleMatch) {
+            const to = ruleMatch[1].trim();
+            const action = ruleMatch[2].toUpperCase();
+            const direction = ruleMatch[3].toUpperCase();
+            const from = (ruleMatch[4] || '').trim() || 'Anywhere';
+            const comment = line.includes('#') ? line.replace(/^.*#\s*/, '').trim() : null;
+            const portProto = to.replace(/\s*\(v6\)$/, '');
+            const isV6 = /\(v6\)$/i.test(to);
+            const sourceNorm = from.replace(/\s*\(v6\)$/, '').trim();
+            result.rules.push({
+              portProto,
+              port: portProto.split('/')[0],
+              proto: portProto.split('/')[1] || 'tcp',
+              action,
+              direction,
+              from,
+              sourceNorm,
+              isV6,
+              comment
+            });
+          } else if (line.trim() === '') {
+            continue;
+          } else {
+            inTable = false;
+          }
+        }
+      }
+      result.unparseable = !result.hasStatusLine && result.rules.length === 0;
+      return result;
+    }
+
+    function buildFunnelData(parsed) {
+      const bySource = new Map();
+      for (const r of parsed.rules) {
+        if (r.direction !== 'IN') continue;
+        const src = r.from;
+        if (!bySource.has(src)) bySource.set(src, []);
+        bySource.get(src).push(r);
+      }
+      const sources = Array.from(bySource.keys()).sort();
+      const flows = [];
+      for (const src of sources) {
+        const rules = bySource.get(src);
+        const byPort = new Map();
+        for (const r of rules) {
+          const key = r.portProto + (r.isV6 ? ' (v6)' : '');
+          if (!byPort.has(key)) byPort.set(key, []);
+          byPort.get(key).push(r);
+        }
+        for (const [portKey, portRules] of byPort) {
+          const allows = portRules.filter(function (x) { return x.action === 'ALLOW'; });
+          const denies = portRules.filter(function (x) { return x.action === 'DENY'; });
+          flows.push({
+            source: src,
+            port: portKey,
+            allow: allows.length > 0,
+            deny: denies.length > 0
+          });
+        }
+      }
+      return { sources, flows };
+    }
+
+    function renderFunnel(parsed) {
+      const { flows } = buildFunnelData(parsed);
+      funnelEl.innerHTML = '';
+
+      const col1 = document.createElement('div');
+      col1.className = 'funnel-col';
+      col1.innerHTML = '<div class="funnel-col-title">Source</div>';
+      const body1 = document.createElement('div');
+      body1.className = 'funnel-col-body';
+      const col2 = document.createElement('div');
+      col2.className = 'funnel-col';
+      col2.innerHTML = '<div class="funnel-col-title">Port</div>';
+      const body2 = document.createElement('div');
+      body2.className = 'funnel-col-body';
+      const col3 = document.createElement('div');
+      col3.className = 'funnel-col';
+      col3.innerHTML = '<div class="funnel-col-title">Decision</div>';
+      const body3 = document.createElement('div');
+      body3.className = 'funnel-col-body';
+
+      flows.forEach(function (f) {
+        const n1 = document.createElement('div');
+        n1.className = 'funnel-node source';
+        n1.textContent = f.source;
+        body1.appendChild(n1);
+        const n2 = document.createElement('div');
+        n2.className = 'funnel-node port';
+        n2.textContent = f.port;
+        body2.appendChild(n2);
+        const n3 = document.createElement('div');
+        n3.className = 'funnel-flow';
+        if (f.allow) {
+          const a = document.createElement('span');
+          a.className = 'funnel-node allow';
+          a.textContent = 'Allow';
+          n3.appendChild(a);
+        }
+        if (f.deny) {
+          const d = document.createElement('span');
+          d.className = 'funnel-node deny';
+          d.textContent = 'Deny';
+          n3.appendChild(d);
+        }
+        body3.appendChild(n3);
+      });
+
+      col1.appendChild(body1);
+      col2.appendChild(body2);
+      col3.appendChild(body3);
+      funnelEl.appendChild(col1);
+      funnelEl.appendChild(col2);
+      funnelEl.appendChild(col3);
+    }
+
+    function runAuditChecks(parsed) {
+      const findings = [];
+      const rules = parsed.rules.filter(function (r) { return r.direction === 'IN'; });
+
+      function add(id, severity, title, detail) {
+        findings.push({ id, severity, title, detail });
+      }
+
+      const defaultIn = parsed.defaultIncoming;
+      if (defaultIn !== 'deny' && defaultIn !== null) {
+        add('missing-default-deny', 'critical', 'Missing default-deny', 'Default incoming policy is "' + defaultIn + '". Recommend: deny (incoming).');
+      } else if (defaultIn === 'deny') {
+        add('default-deny-ok', 'ok', 'Default deny (incoming)', 'Default policy for incoming traffic is deny. Good.');
+      }
+
+      const anywhereRules = rules.filter(function (r) {
+        return r.sourceNorm === 'Anywhere' || r.from === '0.0.0.0/0';
+      });
+      for (const r of anywhereRules) {
+        const portNum = parseInt(r.port, 10);
+        if (HIGH_RISK_PORTS.indexOf(portNum) !== -1 && r.action === 'ALLOW') {
+          add('high-risk-' + r.portProto, 'critical', 'High-risk port open to Anywhere', 'Port ' + r.portProto + ' (e.g. ' + describePort(portNum) + ') is allowed from Anywhere. Consider restricting to specific IPs.');
+        }
+      }
+
+      const broadCidr = rules.filter(function (r) {
+        return (r.from === '0.0.0.0/0' || r.sourceNorm === 'Anywhere') && r.action === 'ALLOW';
+      });
+      for (const r of broadCidr) {
+        const portNum = parseInt(r.port, 10);
+        if (HIGH_RISK_PORTS.indexOf(portNum) !== -1) {
+          add('broad-cidr-' + r.portProto, 'warning', 'Overly broad CIDR on sensitive port', 'Port ' + r.portProto + ' allows 0.0.0.0/0 (Anywhere). Restrict to trusted IPs where possible.');
+        }
+      }
+
+      const portActions = new Map();
+      rules.forEach(function (r) {
+        const key = r.portProto + '|' + r.from;
+        if (!portActions.has(key)) portActions.set(key, { allow: false, deny: false });
+        if (r.action === 'ALLOW') portActions.get(key).allow = true;
+        if (r.action === 'DENY') portActions.get(key).deny = true;
+      });
+      portActions.forEach(function (v, key) {
+        if (v.allow && v.deny) {
+          const [port, from] = key.split('|');
+          add('conflict-' + port, 'warning', 'Conflicting rules', 'Port ' + port + ' from ' + from + ' has both ALLOW and DENY. Order of rules determines outcome.');
+        }
+      });
+
+      const portToSources = new Map();
+      rules.filter(function (r) { return r.action === 'ALLOW'; }).forEach(function (r) {
+        const k = r.portProto;
+        if (!portToSources.has(k)) portToSources.set(k, []);
+        portToSources.get(k).push(r.from);
+      });
+      portToSources.forEach(function (sources, port) {
+        const hasAnywhere = sources.some(function (s) { return s === 'Anywhere' || s === 'Anywhere (v6)' || s === '0.0.0.0/0'; });
+        const hasSpecific = sources.some(function (s) { return s !== 'Anywhere' && s !== 'Anywhere (v6)' && s !== '0.0.0.0/0'; });
+        if (hasAnywhere && hasSpecific) {
+          add('redundant-' + port, 'info', 'Redundant rules', 'Port ' + port + ' has both global (Anywhere) allow and specific IP allow. The global rule makes the specific one redundant.');
+        }
+      });
+
+      const v4Ports = new Set();
+      const v6Ports = new Set();
+      rules.forEach(function (r) {
+        const key = r.portProto.replace(/\s*\(v6\)$/, '');
+        if (r.isV6) v6Ports.add(key); else v4Ports.add(key);
+      });
+      v4Ports.forEach(function (p) {
+        if (!v6Ports.has(p)) add('v6-missing-' + p, 'info', 'IPv4/IPv6 mismatch', 'Port ' + p + ' has IPv4 rule but no IPv6 rule. Consider adding (v6) for consistency.');
+      });
+      v6Ports.forEach(function (p) {
+        if (!v4Ports.has(p)) add('v4-missing-' + p, 'info', 'IPv4/IPv6 mismatch', 'Port ' + p + ' has IPv6 rule but no IPv4 rule. Consider adding IPv4 for consistency.');
+      });
+
+      const noCommentRules = rules.filter(function (r) { return r.comment === null || r.comment === ''; });
+      if (noCommentRules.length > 0) {
+        const examples = noCommentRules.slice(0, 5).map(function (r) { return r.portProto + ' from ' + r.from; }).join('; ');
+        add('no-comment', 'info', 'Rules with no comment', noCommentRules.length + ' rule(s) have no comment. Add comments for documentation (e.g. ufw allow 22 comment "SSH"). Examples: ' + examples + (noCommentRules.length > 5 ? '…' : '.'));
+      }
+
+      return findings;
+    }
+
+    function describePort(port) {
+      const names = { 22: 'SSH', 23: 'Telnet', 3389: 'RDP', 5432: 'PostgreSQL', 3306: 'MySQL', 6379: 'Redis', 27017: 'MongoDB' };
+      return names[port] || 'service';
+    }
+
+    function renderFindings(parsed) {
+      findingsEl.innerHTML = '';
+      if (parsed.statusInactive) {
+        const card = document.createElement('div');
+        card.className = 'finding-card critical';
+        card.innerHTML = '<div class="finding-title">UFW is inactive</div><div class="finding-detail">Your firewall is off. Enable it with: sudo ufw enable</div>';
+        findingsEl.appendChild(card);
+        return;
+      }
+      if (parsed.unparseable) {
+        const card = document.createElement('div');
+        card.className = 'finding-card warning';
+        card.innerHTML = '<div class="finding-title">Could not parse UFW output</div><div class="finding-detail">Paste the full output of: sudo ufw status verbose</div>';
+        findingsEl.appendChild(card);
+        return;
+      }
+      const findings = runAuditChecks(parsed);
+      const dedup = new Map();
+      findings.forEach(function (f) {
+        if (f.severity === 'ok' && dedup.has(f.id)) return;
+        dedup.set(f.id, f);
+      });
+      const list = Array.from(dedup.values());
+      list.forEach(function (f) {
+        const card = document.createElement('div');
+        card.className = 'finding-card ' + f.severity;
+        card.innerHTML = '<div class="finding-title">' + escapeHtml(f.title) + '</div><div class="finding-detail">' + escapeHtml(f.detail) + '</div>';
+        findingsEl.appendChild(card);
+      });
+      if (list.length === 0) {
+        findingsEl.innerHTML = '<p class="audit-ok-msg">No issues flagged. Review the traffic funnel above.</p>';
+      }
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function runAudit() {
+      const text = input.value.trim();
+      if (!text) {
+        placeholder.style.display = 'block';
+        resultsEl.style.display = 'none';
+        return;
+      }
+      const parsed = parseUfwOutput(text);
+      placeholder.style.display = 'none';
+      resultsEl.style.display = 'block';
+      if (parsed.statusInactive || parsed.unparseable) {
+        funnelEl.innerHTML = '';
+      } else {
+        renderFunnel(parsed);
+      }
+      renderFindings(parsed);
+    }
+
+    btnAudit.addEventListener('click', runAudit);
+    btnSample.addEventListener('click', function () {
+      input.value = SAMPLE_INPUT;
+      runAudit();
+    });
+    document.getElementById('btn-clear').addEventListener('click', function () {
+      input.value = '';
+      placeholder.style.display = 'block';
+      resultsEl.style.display = 'none';
+      funnelEl.innerHTML = '';
+      findingsEl.innerHTML = '';
+    });
+    var saveTimer;
+    input.addEventListener('input', function () {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () { saveToStorage(); saveTimer = null; }, 500);
+    });
+    function initFromUrl() {
+      if (SHARED_UFW) {
+        input.value = SHARED_UFW;
+        runAudit();
+        return;
+      }
+      loadFromStorage();
+    }
+    const btnShareUrl = document.getElementById('btn-share-url');
+    if (btnShareUrl) {
+      btnShareUrl.addEventListener('click', function () {
+        try {
+          const value = input.value.trim();
+          const encoded = value ? btoa(unescape(encodeURIComponent(value))) : '';
+          const url = value
+            ? window.location.origin + (location.pathname || '/firewall') + '?ufw=' + encodeURIComponent(encoded)
+            : window.location.origin + (location.pathname || '/firewall');
+          navigator.clipboard.writeText(url).then(function () {
+            const toast = document.getElementById('share-toast');
+            if (toast) {
+              toast.textContent = 'URL copied to clipboard';
+              toast.hidden = false;
+              if (window._shareToastTimeout) clearTimeout(window._shareToastTimeout);
+              window._shareToastTimeout = setTimeout(function () {
+                toast.hidden = true;
+                window._shareToastTimeout = null;
+              }, 2000);
+            }
+          }).catch(function () {});
+        } catch (e) {}
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initFromUrl);
+    } else {
+      initFromUrl();
+    }
+  })();
+
+    const feedbackBtn = document.getElementById('feedback-btn');
+    const feedbackModal = document.getElementById('feedback-modal');
+    const feedbackModalPanel = document.getElementById('feedback-modal-panel');
+    const feedbackModalClose = document.getElementById('feedback-modal-close');
+    function closeFeedbackModal() {
+      if (feedbackModal) {
+        feedbackModal.classList.remove('visible');
+        feedbackModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (feedbackBtn && feedbackModal) {
+      feedbackBtn.addEventListener('click', function () {
+        feedbackModal.classList.add('visible');
+        feedbackModal.setAttribute('aria-hidden', 'false');
+        feedbackModalClose?.focus();
+      });
+    }
+    if (feedbackModalClose && feedbackModal) {
+      feedbackModalClose.addEventListener('click', closeFeedbackModal);
+    }
+    if (feedbackModal && feedbackModalPanel) {
+      feedbackModal.addEventListener('click', function (e) {
+        if (e.target === feedbackModal) closeFeedbackModal();
+      });
+      feedbackModal.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeFeedbackModal();
+      });
+    }
+  </script>
+  <div id="share-toast" class="share-toast" aria-live="polite" hidden>URL copied to clipboard</div>
+  <button type="button" class="feedback-btn" id="feedback-btn" aria-label="Send feedback">💬 Feedback</button>
+  <div class="feedback-modal-overlay" id="feedback-modal" role="dialog" aria-modal="true" aria-label="Feedback form" aria-hidden="true">
+    <div class="feedback-modal-panel" id="feedback-modal-panel">
+      <button type="button" class="feedback-modal-close" id="feedback-modal-close" aria-label="Close">×</button>
+      <iframe src="https://tally.so/embed/Y5Zx15" title="Feedback form" width="480" height="400"></iframe>
+    </div>
+  </div>
+<div style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;" aria-hidden="true">
+  UFW Firewall Auditor — free online tool. Paste ufw status verbose output and instantly check
+  firewall rules for security issues. Detect high-risk open ports like SSH, MySQL, Redis and
+  MongoDB exposed to Anywhere. Check for missing default-deny incoming policy. Find conflicting
+  ALLOW and DENY rules. Identify IPv4 and IPv6 mismatches. Linux UFW rule checker and validator.
+  Free firewall audit tool with no signup required. All processing is client-side.
+</div>
+</body>
+</html>

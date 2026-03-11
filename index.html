@@ -1,0 +1,3870 @@
+<!DOCTYPE html>
+<!--
+  MANUAL TEST CHECKLIST — run after every deploy
+  ================================================
+
+  PASTE TAB RESTORE (the main bug fix):
+  [ ] 1. Open fresh tab → confirm Build tab is active by default
+  [ ] 2. Click "Paste Existing Crontab" tab → refresh → confirm Paste tab is still active
+  [ ] 3. Type "TESTCONTENT123" in textarea → hard refresh → confirm text is restored
+  [ ] 4. Type "12345" → hard refresh → confirm "12345" appears, NOT "job-1 */15 * * * *"
+
+  BUILD TAB RESTORE:
+  [ ] 5. Switch to Build tab → modify a job name → refresh → confirm build tab is active and job name restored
+  [ ] 6. Switch to Build tab → refresh → confirm health-ping shows */5 (not */15)
+
+  LOCALSTORAGE CLEANLINESS:
+  [ ] 7. Open DevTools → Application → Local Storage → confirm these keys DO NOT exist:
+        cc-docker-compose, cc-docker-env, cc-firewall-ufw, cc-proxy-config, cc-ssl-domains
+  [ ] 8. Confirm cc-cron-paste exists after typing in paste tab
+  [ ] 9. Confirm cc-active-tab is either "paste" or "build"
+
+  CONSOLE:
+  [ ] 10. No favicon 404 error in console
+  [ ] 11. No JS errors on fresh load
+
+  OTHER TOOLS (regression):
+  [ ] 12. /ssl/ → github.com → green cert result
+  [ ] 13. /docker/ → sample compose → all 4 audit panels render
+  [ ] 14. Mobile 375px → nav does not overflow
+-->
+<!--
+  External CDN resources (audit list — every resource loaded, no tracking/analytics):
+  - https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap (headings only)
+  - https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js (Share Timeline screenshot)
+  - https://cdn.jsdelivr.net/npm/cronstrue@2.50.0/+esm (human-readable cron descriptions)
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cron Job Overlap Checker & Visualiser | ConfigClarity</title>
+  <meta name="description" content="Free devops audit tools — visualise cron overlaps, check SSL certificate expiry, and audit Docker Compose files. No signup, no backend, everything runs in your browser.">
+  <meta name="keywords" content="cron expression builder, crontab generator, cron job builder, cron schedule builder, crontab guru alternative, cron overlap checker, multiple cron tester">
+  <link rel="canonical" href="https://configclarity.dev">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230b0d14'/><text x='16' y='22' text-anchor='middle' font-size='18'>🕐</text></svg>">
+  <meta property="og:title" content="Cron Job Overlap Checker & Visualiser | ConfigClarity">
+  <meta property="og:description" content="Build cron expressions visually or paste your crontab. See job overlaps on a 24h timeline before they crash your server.">
+  <meta property="og:url" content="https://configclarity.dev/">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Cron Expression Builder & Timeline Visualizer – ConfigClarity">
+  <meta name="twitter:description" content="Build cron expressions with dropdowns, see plain English translations, visualize overlaps on a 24h timeline. Free crontab builder and tester — no signup required.">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "ConfigClarity",
+    "description": "Paste your crontab and instantly see a 24-hour timeline of job overlaps, Server Load Warnings, and human-readable schedules. Free, no signup, nothing leaves your browser.",
+    "url": "https://configclarity.dev",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+  <script src="https://cdn.jsdelivr.net/npm/cronstrue@2/dist/cronstrue.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script type="module">
+    const SHARED_CRONTAB = (function () {
+      try {
+        const p = new URLSearchParams(window.location.search);
+        const v = p.get('crontab');
+        if (!v) return null;
+        return decodeURIComponent(escape(atob(v.replace(/ /g, '+'))));
+      } catch (_) { return null; }
+    })();
+
+    let cronstrue;
+    try {
+      const mod = await import('https://cdn.jsdelivr.net/npm/cronstrue@2.50.0/+esm');
+      cronstrue = mod.default || mod;
+    } catch (_) {
+      cronstrue = { toString: () => '' };
+    }
+
+    function debounce(fn, delay) {
+      let timer;
+      return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    const MACROS = {
+      '@hourly': '0 * * * *',
+      '@daily': '0 0 * * *',
+      '@midnight': '0 0 * * *',
+      '@weekly': '0 0 * * 0',
+      '@monthly': '0 0 1 * *',
+      '@yearly': '0 0 1 1 *',
+      '@annually': '0 0 1 1 *'
+    };
+
+    function normalizeExpression(expr) {
+      const t = expr.trim().toLowerCase();
+      return MACROS[t] || expr.trim();
+    }
+
+    function jobNameFromCommand(command) {
+      const path = command.trim().split(/\s+/)[0] || '';
+      const filename = path.split('/').pop() || path || 'job';
+      return filename.replace(/\.sh$/i, '') || filename;
+    }
+
+    function nameFromExpression(expressionPart, jobIndex) {
+      const p = expressionPart.trim().split(/\s+/);
+      if (p.length < 5) return `job-${jobIndex}`;
+      const [min, hour, dom, month, dow] = p;
+      if (/^\d+$/.test(dom) && month === '*' && dow === '*') return `monthly-${dom}`;
+      if (dom === '*' && month === '*' && /^\d+$/.test(dow)) return `weekly-${dow}`;
+      if (min === '0' && hour === '*' && dom === '*' && month === '*' && dow === '*') return 'hourly';
+      if (min === '0' && hour === '0' && dom === '*' && month === '*' && dow === '*') return 'daily-midnight';
+      if (min.startsWith('*/') && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+        const n = min.slice(2);
+        if (/^\d+$/.test(n)) return `every-${n}min`;
+      }
+      if (min === '0' && hour !== '*' && dom === '*' && month === '*' && dow === '*') return `daily-${hour}`;
+      return `job-${jobIndex}`;
+    }
+
+    function parseCronInput(text) {
+      const lines = text.split('\n');
+      const results = [];
+      let ignoredEnvCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        if (trimmed === '' || trimmed.startsWith('#')) continue;
+        if (trimmed.includes('=')) {
+          ignoredEnvCount++;
+          continue;
+        }
+
+        const parts = trimmed.split(/\s+/);
+        const firstChar = trimmed.charAt(0);
+        const isStandardCrontab = /[\d*]/.test(firstChar);
+
+        let name;
+        let expressionPart;
+        let command = '';
+
+        if (isStandardCrontab) {
+          if (parts.length < 5) {
+            results.push({ name: `job-${results.length + 1}`, expression: '', error: 'Standard crontab line needs at least 5 fields (minute hour day month weekday)' });
+            continue;
+          }
+          expressionPart = parts.slice(0, 5).join(' ');
+          command = parts.slice(5).join(' ');
+          name = command ? jobNameFromCommand(command) : nameFromExpression(expressionPart, results.length + 1);
+        } else {
+          if (parts.length < 2) {
+            results.push({ name: parts[0] || `job-${results.length + 1}`, expression: '', error: 'Missing cron expression (need at least job_name and expression)' });
+            continue;
+          }
+          name = parts[0];
+          expressionPart = parts.slice(1).join(' ');
+        }
+
+        let defaultDuration;
+        if (i > 0) {
+          const prevTrimmed = lines[i - 1].trim();
+          const durationMatch = prevTrimmed.match(/^#\s*duration\s*:\s*(\d+)/i);
+          if (durationMatch) {
+            const n = Number(durationMatch[1]);
+            if (!isNaN(n) && n >= 1) defaultDuration = Math.min(n, 120);
+          }
+        }
+
+        const expression = normalizeExpression(expressionPart);
+        const now = new Date();
+        const occurrences = getNextOccurrences(expression, now, 20);
+        if (occurrences.length > 0 || expressionToParts(expression)) {
+          results.push({ name, expression, occurrences, defaultDuration, command });
+        } else {
+          results.push({ name, expression: expressionPart, error: 'Invalid or unsupported cron expression' });
+        }
+      }
+      return { results, ignoredEnvCount };
+    }
+
+    const input = document.getElementById('cron-input');
+    const errorEl = document.getElementById('parse-errors');
+    const ignoredNoteEl = document.getElementById('cron-ignored-note');
+    const btnVisualize = document.getElementById('btn-visualize');
+    const btnSample = document.getElementById('btn-sample');
+    const overlapThresholdSelect = document.getElementById('overlap-threshold');
+    const timelineWindowSelect = document.getElementById('timeline-range');
+    const timelineActionsLeft = document.getElementById('timeline-actions-left');
+    const timezoneSelect = document.getElementById('timezone');
+    const timezoneOffsetInput = document.getElementById('timezone-offset');
+    const parsedJobsList = document.getElementById('parsed-jobs-list');
+    const overlapReportEl = document.getElementById('overlap-report');
+    const serverLoadBanner = document.getElementById('server-load-banner');
+    const singleJobPrompt = document.getElementById('single-job-prompt');
+    const timelineAutoNoteEl = document.getElementById('timeline-auto-note');
+    let timelineAutoNoteTimeout = null;
+    let userOverrodeTimeline = false;
+
+    function getOverlapThresholdMinutes() {
+      return Number(overlapThresholdSelect?.value || 5);
+    }
+    function getTimelineWindowMs() {
+      const minutes = Number(timelineWindowSelect?.value || 1440);
+      return minutes * 60 * 1000;
+    }
+
+    function estimateIntervalMinutes(expr) {
+      try {
+        const parts = expr.trim().split(/\s+/);
+        if (parts.length < 5) return 1440;
+        const [min, hour, day, month, weekday] = parts;
+
+        if (month !== '*') return 43200;        // runs less than monthly
+        if (day !== '*' && !day.startsWith('*/')) return 43200; // monthly
+        if (weekday !== '*' && weekday !== '*/1') return 10080; // weekly
+        if (hour !== '*' && !hour.startsWith('*/1')) {
+          if (hour.startsWith('*/')) return parseInt(hour.slice(2), 10) * 60;
+          return 1440; // specific hour = daily
+        }
+        if (min.startsWith('*/')) return parseInt(min.slice(2), 10);
+        if (min !== '*') return 60;
+        return 1;
+      } catch (e) { return 1440; }
+    }
+
+    function getOptimalWindow(jobs) {
+      let maxInterval = 0;
+      for (const job of jobs) {
+        const interval = estimateIntervalMinutes(job.expression);
+        if (interval > maxInterval) maxInterval = interval;
+      }
+      const needed = maxInterval * 3;
+      if (needed <= 1440)  return { minutes: 1440,  label: 'Next 24 hours' };
+      if (needed <= 4320)  return { minutes: 4320,  label: 'Next 3 days' };
+      if (needed <= 10080) return { minutes: 10080, label: 'Next 7 days' };
+      return                      { minutes: 43200, label: 'Next 30 days' };
+    }
+    function getTimezoneConfig() {
+      const tz = timezoneSelect?.value || 'local';
+      if (tz === 'utc') return { mode: 'utc' };
+      if (tz === 'custom') {
+        const hours = Number(timezoneOffsetInput?.value || 0);
+        return { mode: 'offset', offsetMinutes: hours * 60 };
+      }
+      return { mode: 'local' };
+    }
+    function getJobDurationMinutes(jobIndex) {
+      const el = document.querySelector(`[data-job-duration-index="${jobIndex}"]`);
+      const n = el ? Number(el.value) : 5;
+      return isNaN(n) || n < 1 ? 5 : Math.min(n, 120);
+    }
+    function getJobWeight(jobIndex) {
+      const el = document.querySelector(`[data-job-weight-index="${jobIndex}"]`);
+      const v = el ? (el.value || 'low').toLowerCase() : 'low';
+      return (v === 'medium' || v === 'high') ? v : 'low';
+    }
+
+    function getCronstrue(expression) {
+      try {
+        if (typeof cronstrue === 'function') return cronstrue(expression);
+        if (cronstrue && typeof cronstrue.toString === 'function') return cronstrue.toString(expression);
+      } catch (_) {}
+      return '';
+    }
+
+    const CC_CRON_PASTE = 'cc-cron-paste';
+    const CC_CRON_JOB_SETTINGS = 'cc-cron-job-settings';
+    const CC_ACTIVE_TAB_KEY = 'cc-active-tab';
+
+    function getJobSettingsFromStorage() {
+      try {
+        const raw = localStorage.getItem(CC_CRON_JOB_SETTINGS);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch (_) { return null; }
+    }
+
+    function getDurationsFromStoredJobSettings() {
+      const stored = getJobSettingsFromStorage();
+      if (!stored) return null;
+      const map = {};
+      Object.keys(stored).forEach(function (name) {
+        const s = stored[name];
+        if (s && typeof s.duration === 'number' && s.duration >= 1) map[name] = Math.min(s.duration, 120);
+      });
+      return Object.keys(map).length ? map : null;
+    }
+
+    function saveJobSettingsToStorage() {
+      if (!parsedJobsList) return;
+      const out = {};
+      parsedJobsList.querySelectorAll('.parsed-job-item').forEach(function (item) {
+        const nameEl = item.querySelector('.parsed-job-name');
+        const durationEl = item.querySelector('.parsed-job-duration');
+        const weightEl = item.querySelector('.parsed-job-weight');
+        if (!nameEl || !durationEl || !weightEl) return;
+        const name = nameEl.textContent.trim();
+        if (!name) return;
+        const n = Number(durationEl.value);
+        const duration = !isNaN(n) && n >= 1 ? Math.min(n, 120) : 5;
+        const w = (weightEl.value || 'low').toLowerCase();
+        const weight = (w === 'medium' || w === 'high') ? w : 'low';
+        out[name] = { duration: duration, weight: weight };
+      });
+      try {
+        localStorage.setItem(CC_CRON_JOB_SETTINGS, JSON.stringify(out));
+      } catch (_) {}
+    }
+
+    function getPersistedDurationsByJobName() {
+      const map = {};
+      if (!parsedJobsList) return map;
+      parsedJobsList.querySelectorAll('.parsed-job-item').forEach((item) => {
+        const nameEl = item.querySelector('.parsed-job-name');
+        const inputEl = item.querySelector('.parsed-job-duration');
+        if (!nameEl || !inputEl) return;
+        const name = nameEl.textContent.trim();
+        const n = Number(inputEl.value);
+        if (name && !isNaN(n) && n >= 1) map[name] = Math.min(n, 120);
+      });
+      return map;
+    }
+
+    function renderParsedJobsList(validJobs, durationsByJobName = {}, jobSettingsFromStorage = null) {
+      if (!parsedJobsList) return;
+      parsedJobsList.innerHTML = '';
+      if (validJobs.length === 0) return;
+      const tzLabelText = getTimezoneLabel();
+      const wrap = document.createElement('div');
+      wrap.className = 'parsed-jobs-list';
+      validJobs.forEach((job, i) => {
+        const human = getCronstrue(job.expression);
+        const humanWithTz = human ? `${human} (${tzLabelText})` : '';
+        const stored = jobSettingsFromStorage && jobSettingsFromStorage[job.name];
+        const persisted = durationsByJobName[job.name] != null ? durationsByJobName[job.name] : (stored && typeof stored.duration === 'number' ? stored.duration : null);
+        const defaultFromComment = job.defaultDuration != null && job.defaultDuration >= 1 ? Math.min(Number(job.defaultDuration), 120) : null;
+        const durationValue = persisted != null && persisted >= 1 ? Math.min(Number(persisted), 120) : (defaultFromComment ?? 5);
+        const w = (stored && stored.weight === 'medium') ? 'medium' : (stored && stored.weight === 'high') ? 'high' : 'low';
+        const lowSel = w === 'low' ? ' selected' : '';
+        const medSel = w === 'medium' ? ' selected' : '';
+        const highSel = w === 'high' ? ' selected' : '';
+        const item = document.createElement('div');
+        item.className = 'parsed-job-item';
+        item.innerHTML = `
+          <div class="parsed-job-name">${escapeHtml(job.name)}</div>
+          ${humanWithTz ? `<div class="parsed-job-cronstrue">${escapeHtml(humanWithTz)}</div>` : ''}
+          <label class="parsed-job-duration-wrap">
+            <span>Job duration (min)</span>
+            <input type="number" min="1" max="120" value="${durationValue}" data-job-duration-index="${i}" class="parsed-job-duration" />
+          </label>
+          <label class="parsed-job-weight-wrap">
+            <span>Job severity</span>
+            <select data-job-weight-index="${i}" class="parsed-job-weight" aria-label="Job severity for ${escapeHtml(job.name)}">
+              <option value="low"${lowSel}>Low</option>
+              <option value="medium"${medSel}>Medium</option>
+              <option value="high"${highSel}>High</option>
+            </select>
+          </label>
+        `;
+        wrap.appendChild(item);
+      });
+      parsedJobsList.appendChild(wrap);
+      if (window._ccJobSettingsSaveTimer) clearTimeout(window._ccJobSettingsSaveTimer);
+      window._ccJobSettingsSaveTimer = setTimeout(function () {
+        saveJobSettingsToStorage();
+        window._ccJobSettingsSaveTimer = null;
+      }, 500);
+      wrap.addEventListener('change', function () {
+        if (window._ccJobSettingsSaveTimer) clearTimeout(window._ccJobSettingsSaveTimer);
+        window._ccJobSettingsSaveTimer = setTimeout(function () {
+          saveJobSettingsToStorage();
+          window._ccJobSettingsSaveTimer = null;
+        }, 500);
+      });
+    }
+
+    function formatInTz(isoString, tzConfig) {
+      const d = new Date(isoString);
+      if (tzConfig.mode === 'utc') {
+        return { d, useUTC: true };
+      }
+      if (tzConfig.mode === 'offset') {
+        const displayMs = d.getTime() + tzConfig.offsetMinutes * 60 * 1000;
+        return { d: new Date(displayMs), useUTC: true };
+      }
+      return { d, useUTC: false };
+    }
+    function formatOccurrenceTimeWithTz(isoString) {
+      const tz = getTimezoneConfig();
+      const { d, useUTC } = formatInTz(isoString, tz);
+      const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const day = weekdays[useUTC ? d.getUTCDay() : d.getDay()];
+      const date = useUTC ? d.getUTCDate() : d.getDate();
+      const month = months[useUTC ? d.getUTCMonth() : d.getMonth()];
+      const h = useUTC ? d.getUTCHours() : d.getHours();
+      const m = useUTC ? d.getUTCMinutes() : d.getMinutes();
+      const time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      return `${day} ${date} ${month} · ${time}`;
+    }
+    function formatTimeOnly(ms, tzConfig) {
+      if (tzConfig.mode === 'offset') ms = ms + (tzConfig.offsetMinutes || 0) * 60 * 1000;
+      const d = new Date(ms);
+      const useUTC = tzConfig.mode !== 'local';
+      const h = useUTC ? d.getUTCHours() : d.getHours();
+      const m = useUTC ? d.getUTCMinutes() : d.getMinutes();
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    function formatDateOnly(ms, tzConfig) {
+      if (tzConfig.mode === 'offset') ms = ms + (tzConfig.offsetMinutes || 0) * 60 * 1000;
+      const d = new Date(ms);
+      const useUTC = tzConfig.mode !== 'local';
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const date = useUTC ? d.getUTCDate() : d.getDate();
+      const month = months[useUTC ? d.getUTCMonth() : d.getMonth()];
+      return `${month} ${date}`;
+    }
+    function formatAxisLabel(ms, windowMs, tzConfig) {
+      const windowDays = windowMs / (24 * 60 * 60 * 1000);
+      if (windowDays <= 1.5) return formatTimeOnly(ms, tzConfig);
+      if (windowDays <= 10) return formatDateOnly(ms, tzConfig) + ' ' + formatTimeOnly(ms, tzConfig);
+      return formatDateOnly(ms, tzConfig);
+    }
+
+    function getDetectedTimezone() {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+      } catch (_) {
+        return 'Local';
+      }
+    }
+
+    function getTimezoneLabel() {
+      const tz = timezoneSelect?.value || 'local';
+      if (tz === 'local') return getDetectedTimezone();
+      if (tz === 'utc') return 'UTC';
+      const h = Number(timezoneOffsetInput?.value || 0);
+      return `UTC${h >= 0 ? '+' : ''}${h}`;
+    }
+
+    function updateTzLabel() {
+      const localOption = document.querySelector('#timezone option[value="local"]');
+      if (localOption) localOption.textContent = getDetectedTimezone();
+    }
+    timezoneSelect?.addEventListener('change', function () {
+      updateTzLabel();
+      const wrap = document.getElementById('timezone-offset-wrap');
+      if (wrap) wrap.style.display = timezoneSelect.value === 'custom' ? 'block' : 'none';
+    });
+    timezoneOffsetInput?.addEventListener('input', updateTzLabel);
+    const tzOffsetWrap = document.getElementById('timezone-offset-wrap');
+    if (tzOffsetWrap) tzOffsetWrap.style.display = 'none';
+
+    (function initTimezoneDisplay() {
+      updateTzLabel();
+    })();
+
+    (function initQuickExamplesCollapsed() {
+      document.querySelector('.quick-examples')?.removeAttribute('open');
+    })();
+
+    let lastOverlapReportText = '';
+
+    function runVisualization(optionalDurationsByJobName, optionalWindowMinutes) {
+      errorEl.innerHTML = '';
+      errorEl.classList.remove('has-errors');
+      const text = input.value;
+      const { results, ignoredEnvCount } = parseCronInput(text);
+      const errors = results.filter(r => r.error);
+      if (errors.length) {
+        errorEl.classList.add('has-errors');
+        errorEl.innerHTML = errors.map(r => `<div class="error-line">${escapeHtml(r.name)}: ${escapeHtml(r.error)}</div>`).join('');
+      }
+      const toLog = results.map(r => {
+        if (r.error) return { name: r.name, expression: r.expression, error: r.error };
+        return { name: r.name, expression: r.expression, occurrences: r.occurrences };
+      });
+      console.log(toLog);
+      const validJobs = results.filter(r => !r.error);
+      const storedDurations = getDurationsFromStoredJobSettings();
+      const durationsByJobName = optionalDurationsByJobName != null ? optionalDurationsByJobName : (storedDurations || getPersistedDurationsByJobName());
+      const jobSettingsFromStorage = getJobSettingsFromStorage();
+      let windowMinutesForRender = optionalWindowMinutes;
+      const panelPaste = document.getElementById('panel-paste');
+      const activeTabIsPaste = panelPaste && !panelPaste.hidden;
+      if (activeTabIsPaste && validJobs.length > 0 && !userOverrodeTimeline) {
+        const optimal = getOptimalWindow(validJobs);
+        const currentVal = Number(timelineWindowSelect?.value || 1440);
+        if (optimal.minutes !== currentVal) {
+          if (timelineWindowSelect) timelineWindowSelect.value = String(optimal.minutes);
+          if (timelineAutoNoteEl) {
+            if (timelineAutoNoteTimeout) clearTimeout(timelineAutoNoteTimeout);
+            timelineAutoNoteEl.textContent = 'Auto-set to ' + optimal.label + ' to show all job schedules';
+            timelineAutoNoteEl.style.display = 'block';
+            timelineAutoNoteEl.style.fontSize = '0.75rem';
+            timelineAutoNoteEl.style.color = '#8a8fb5';
+            timelineAutoNoteEl.style.marginTop = '0.25rem';
+            timelineAutoNoteTimeout = setTimeout(function () {
+              timelineAutoNoteEl.textContent = '';
+              timelineAutoNoteEl.style.display = 'none';
+              timelineAutoNoteTimeout = null;
+            }, 4000);
+          }
+          windowMinutesForRender = undefined;
+        }
+      }
+      renderParsedJobsList(validJobs, durationsByJobName, jobSettingsFromStorage);
+      renderTimeline(validJobs, windowMinutesForRender);
+      if (ignoredNoteEl) {
+        if (ignoredEnvCount > 0) {
+          ignoredNoteEl.textContent = ignoredEnvCount === 1 ? '1 environment line ignored' : `${ignoredEnvCount} environment lines ignored`;
+          ignoredNoteEl.style.display = 'block';
+        } else {
+          ignoredNoteEl.textContent = '';
+          ignoredNoteEl.style.display = 'none';
+        }
+      }
+    }
+
+    if (btnVisualize) {
+      btnVisualize.addEventListener('click', function () {
+        runVisualization();
+        try {
+          const encoded = btoa(unescape(encodeURIComponent(input.value)));
+          const params = new URLSearchParams(location.search);
+          params.set('jobs', encoded);
+          const newUrl = location.pathname + '?' + params.toString();
+          history.replaceState(null, '', newUrl);
+        } catch (_) {}
+      });
+    }
+
+    if (timelineWindowSelect) {
+      timelineWindowSelect.addEventListener('change', function () {
+        userOverrodeTimeline = true;
+        runVisualization();
+      });
+    }
+    if (input) {
+      input.addEventListener('input', function () {
+        if (input.value.trim() === '') userOverrodeTimeline = false;
+      });
+    }
+
+    window.addEventListener('resize', debounce(function () {
+      runVisualization();
+    }, 200));
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    const LANE_COLORS = ['#6c63ff', '#22d3ee', '#a78bfa', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#f97316'];
+    const COLOR_HEALTHY = '#10b981';
+    const COLOR_OVERLAP = '#f43f5e';
+
+    function expressionToParts(expr) {
+      const t = (expr || '').trim().split(/\s+/);
+      if (t.length === 5) return t;
+      if (t.length === 6) return [t[1], t[2], t[3], t[4], t[5]];
+      return null;
+    }
+
+    function matchCronFieldValue(fieldStr, value) {
+      const s = (fieldStr || '').trim();
+      if (s === '*') return true;
+      if (s.indexOf('*/') === 0) {
+        const n = parseInt(s.slice(2), 10);
+        return !isNaN(n) && n > 0 && value % n === 0;
+      }
+      if (s.indexOf(',') >= 0) {
+        const parts = s.split(',');
+        for (let i = 0; i < parts.length; i++) {
+          const p = parts[i].trim();
+          if (p.indexOf('-') >= 0) {
+            const dash = p.indexOf('-');
+            const a = parseInt(p.slice(0, dash), 10);
+            const b = parseInt(p.slice(dash + 1), 10);
+            if (!isNaN(a) && !isNaN(b) && value >= a && value <= b) return true;
+          } else {
+            const num = parseInt(p, 10);
+            if (!isNaN(num) && (value === num || (value === 0 && num === 7))) return true;
+          }
+        }
+        return false;
+      }
+      if (s.indexOf('-') >= 0) {
+        const dash = s.indexOf('-');
+        const a = parseInt(s.slice(0, dash), 10);
+        const b = parseInt(s.slice(dash + 1), 10);
+        return !isNaN(a) && !isNaN(b) && value >= a && value <= b;
+      }
+      const num = parseInt(s, 10);
+      return !isNaN(num) && (value === num || (value === 0 && num === 7));
+    }
+
+    function getOccurrencesInWindow(expression, windowStartMs, windowEndMs) {
+      const parts = expressionToParts(expression);
+      if (!parts) return [];
+      const [minStr, hourStr, dayStr, monthStr, dowStr] = parts;
+      const out = [];
+      const limit = Math.min(10000, Math.ceil((windowEndMs - windowStartMs) / (60 * 1000)) + 100);
+      const oneMin = 60 * 1000;
+      let t = windowStartMs;
+      let iter = 0;
+      while (iter < limit && t <= windowEndMs) {
+        const d = new Date(t);
+        const min = d.getMinutes();
+        const hour = d.getHours();
+        const dom = d.getDate();
+        const month = d.getMonth() + 1;
+        const dow = d.getDay();
+        if (matchCronFieldValue(minStr, min) && matchCronFieldValue(hourStr, hour) && matchCronFieldValue(dayStr, dom) && matchCronFieldValue(monthStr, month) && matchCronFieldValue(dowStr, dow)) {
+          out.push(d.toISOString());
+        }
+        t += oneMin;
+        iter++;
+      }
+      return out;
+    }
+
+    function getNextOccurrences(expression, fromDate, count) {
+      const parts = expressionToParts(expression);
+      if (!parts) return [];
+      const [minStr, hourStr, dayStr, monthStr, dowStr] = parts;
+      const results = [];
+      const oneMin = 60 * 1000;
+      const maxIter = 525600;
+      let t = fromDate.getTime();
+      let iter = 0;
+      while (results.length < count && iter < maxIter) {
+        const d = new Date(t);
+        const min = d.getMinutes();
+        const hour = d.getHours();
+        const dom = d.getDate();
+        const month = d.getMonth() + 1;
+        const dow = d.getDay();
+        if (matchCronFieldValue(minStr, min) && matchCronFieldValue(hourStr, hour) && matchCronFieldValue(dayStr, dom) && matchCronFieldValue(monthStr, month) && matchCronFieldValue(dowStr, dow)) {
+          results.push(d.toISOString ? d.toISOString() : d.toISOString());
+        }
+        t += oneMin;
+        iter++;
+      }
+      return results;
+    }
+
+    function isValidCronExpression(expr) {
+      return expressionToParts(expr) !== null;
+    }
+
+    const placeholderEl = document.getElementById('timeline-placeholder');
+    const emptyEl = document.getElementById('timeline-empty');
+    const wrapperEl = document.getElementById('timeline-wrapper');
+    const containerEl = document.getElementById('timeline-svg-container');
+    const tooltipEl = document.getElementById('timeline-tooltip');
+    const timelineActionsEl = document.getElementById('timeline-actions');
+    const timelineLegendEl = document.getElementById('timeline-legend');
+
+    let hasVisualised = false;
+
+    function updateControlsVisibility() {
+      if (timelineActionsEl) timelineActionsEl.style.display = 'flex';
+      if (timelineLegendEl) timelineLegendEl.style.display = hasVisualised ? 'block' : 'none';
+      if (overlapReportEl) overlapReportEl.style.display = hasVisualised ? 'block' : 'none';
+    }
+    updateControlsVisibility();
+
+    function resetTimelinePanel(mode) {
+      containerEl.innerHTML = '';
+      if (overlapReportEl) overlapReportEl.innerHTML = '';
+      if (serverLoadBanner) serverLoadBanner.classList.remove('visible');
+      const oomBannerEl = document.getElementById('oom-warning-banner');
+      if (oomBannerEl) oomBannerEl.classList.remove('visible');
+      wrapperEl.classList.remove('visible');
+      const resolutionNoteEl = document.getElementById('timeline-resolution-note');
+      if (resolutionNoteEl) { resolutionNoteEl.textContent = ''; resolutionNoteEl.style.display = 'none'; }
+      emptyEl.classList.remove('visible');
+      if (singleJobPrompt) singleJobPrompt.classList.remove('visible');
+      placeholderEl.style.display = 'block';
+      placeholderEl.textContent = mode === 'build' ? 'Add jobs and click Visualise.' : 'Your timeline will appear here.';
+    }
+
+    function renderTimeline(validJobs, optionalWindowMinutes) {
+      lastOverlapReportText = '';
+      placeholderEl.style.display = 'none';
+      emptyEl.classList.remove('visible');
+      wrapperEl.classList.remove('visible');
+      containerEl.innerHTML = '';
+      if (overlapReportEl) overlapReportEl.innerHTML = '';
+      if (serverLoadBanner) serverLoadBanner.classList.remove('visible');
+      const oomBannerEl = document.getElementById('oom-warning-banner');
+      if (oomBannerEl) oomBannerEl.classList.remove('visible');
+      if (singleJobPrompt) singleJobPrompt.classList.remove('visible');
+      const resolutionNoteEl = document.getElementById('timeline-resolution-note');
+      if (resolutionNoteEl) { resolutionNoteEl.textContent = ''; resolutionNoteEl.style.display = 'none'; }
+
+      if (validJobs.length === 0) {
+        emptyEl.classList.add('visible');
+        return;
+      }
+
+      const windowMs = optionalWindowMinutes != null
+        ? optionalWindowMinutes * 60 * 1000
+        : getTimelineWindowMs();
+      const windowStart = Date.now();
+      const windowEnd = windowStart + windowMs;
+      const tzConfig = getTimezoneConfig();
+      const thresholdMin = getOverlapThresholdMinutes();
+
+      const WEIGHT_BAR_HEIGHTS = { low: 20, medium: 32, high: 44 };
+      const windowMinutes = windowMs / (60 * 1000);
+      const windowDays = windowMs / (24 * 60 * 60 * 1000);
+      const jobsWithOccurrences = validJobs.map((job, i) => {
+        const occs = getOccurrencesInWindow(job.expression, windowStart, windowEnd);
+        const durMin = getJobDurationMinutes(i);
+        const durMs = durMin * 60 * 1000;
+        const weight = getJobWeight(i);
+        const barHeight = WEIGHT_BAR_HEIGHTS[weight] || WEIGHT_BAR_HEIGHTS.low;
+        const runs = occs.map(iso => {
+          const start = new Date(iso).getTime();
+          return { startMs: start, endMs: start + durMs };
+        });
+        const intervalMinutes = estimateIntervalMinutes(job.expression);
+        const barsNeeded = intervalMinutes > 0 ? windowMinutes / intervalMinutes : 0;
+        const is7DayWindow = Math.round(windowMinutes) === 10080;
+        const is30DayWindow = Math.round(windowMinutes) === 43200;
+        const capFor7Day = is7DayWindow && intervalMinutes <= 5;
+        const capFor30Day = is30DayWindow && intervalMinutes < 30;
+        let sampleEvery = 1;
+        if ((capFor7Day || capFor30Day) && barsNeeded > 2000) {
+          sampleEvery = Math.ceil(barsNeeded / 2000);
+        }
+        return {
+          name: job.name,
+          expression: job.expression,
+          color: LANE_COLORS[i % LANE_COLORS.length],
+          weight: weight,
+          barHeight: barHeight,
+          occurrences: occs,
+          durationMs: durMs,
+          runs: runs,
+          sampleEvery: sampleEvery
+        };
+      });
+
+      let showReducedResolutionNote = jobsWithOccurrences.some(j => j.sampleEvery > 1);
+
+      const allRuns = [];
+      jobsWithOccurrences.forEach((job, ji) => {
+        job.runs.forEach(r => allRuns.push({ jobIndex: ji, name: job.name, startMs: r.startMs, endMs: r.endMs }));
+      });
+
+      const overlapIntervals = [];
+      const overlapReportLines = [];
+      for (let a = 0; a < jobsWithOccurrences.length; a++) {
+        for (let b = a + 1; b < jobsWithOccurrences.length; b++) {
+          const jobA = jobsWithOccurrences[a];
+          const jobB = jobsWithOccurrences[b];
+          jobA.runs.forEach(ra => {
+            jobB.runs.forEach(rb => {
+              const start = Math.max(ra.startMs, rb.startMs);
+              const end = Math.min(ra.endMs, rb.endMs);
+              if (start < end) {
+                overlapIntervals.push({ startMs: start, endMs: end });
+                const timeStr = formatOccurrenceTimeWithTz(new Date(start).toISOString());
+                const atPart = timeStr.split(' · ')[1] || timeStr;
+                const datePart = timeStr.split(' · ')[0] || '';
+                overlapReportLines.push({ a: jobA.name, b: jobB.name, startMs: start, label: `${datePart} · ${atPart}` });
+              }
+            });
+          });
+        }
+      }
+
+      const mergedBands = mergeIntervals(overlapIntervals);
+
+      let serverLoadWarning = false;
+      let oomWarning = false;
+      let firstOomTimeMs = null;
+      const oneMinMs = 60 * 1000;
+      for (let t = windowStart; t < windowEnd; t += oneMinMs) {
+        let jobsInThisMinute = 0;
+        let highWeightInThisMinute = 0;
+        jobsWithOccurrences.forEach(job => {
+          const hasRunInMinute = job.runs.some(r => r.startMs < t + oneMinMs && r.endMs > t);
+          if (hasRunInMinute) {
+            jobsInThisMinute++;
+            if (job.weight === 'high') highWeightInThisMinute++;
+          }
+        });
+        if (jobsInThisMinute >= 3) serverLoadWarning = true;
+        if (highWeightInThisMinute >= 3 && !firstOomTimeMs) {
+          oomWarning = true;
+          firstOomTimeMs = t;
+        }
+      }
+      if (serverLoadBanner) {
+        if (serverLoadWarning) serverLoadBanner.classList.add('visible');
+      }
+      if (oomBannerEl) {
+        if (oomWarning && firstOomTimeMs != null) {
+          const timeStr = formatOccurrenceTimeWithTz(new Date(firstOomTimeMs).toISOString());
+          oomBannerEl.textContent = '⚠ Server Load Warning: 3+ High-severity jobs overlap at ' + timeStr + '. Risk of OOM or resource contention.';
+          oomBannerEl.classList.add('visible');
+        } else {
+          oomBannerEl.classList.remove('visible');
+        }
+      }
+
+      if (singleJobPrompt) {
+        if (validJobs.length === 1) singleJobPrompt.classList.add('visible');
+      }
+
+      const thresholdLabel = `${thresholdMin} min`;
+      const windowLabel = windowMs <= 24 * 60 * 60 * 1000 ? 'next 24 hours' : windowMs <= 3 * 24 * 60 * 60 * 1000 ? 'next 3 days' : windowMs <= 7 * 24 * 60 * 60 * 1000 ? 'next 7 days' : 'next 30 days';
+      const pairKey = (a, b) => [a, b].sort().join('\0');
+      const byPair = {};
+      overlapReportLines.forEach(l => {
+        const key = pairKey(l.a, l.b);
+        if (!byPair[key]) byPair[key] = { a: l.a, b: l.b, items: [] };
+        byPair[key].items.push({ startMs: l.startMs, label: l.label });
+      });
+      const reportEntries = [];
+      Object.values(byPair).forEach(group => {
+        group.items.sort((x, y) => x.startMs - y.startMs);
+        const count = group.items.length;
+        const first = group.items[0];
+        const parts = first.label.split(' · ');
+        const timePart = parts[1] || '';
+        const datePart = parts[0] || '';
+        const match = datePart.match(/(\w+)\s+(\d+)\s+(\w+)/);
+        const monDate = match ? `${match[3]} ${match[2]}` : datePart;
+        reportEntries.push({ type: 'summary', a: group.a, b: group.b, count, timePart, monDate });
+      });
+      if (overlapReportEl) {
+        if (reportEntries.length === 0) {
+          lastOverlapReportText = `Overlap Report\n\n✓ No overlaps detected in the ${windowLabel}`;
+          overlapReportEl.innerHTML = `<div class="overlap-report-ok">✓ No overlaps detected in the ${windowLabel}</div>`;
+          overlapReportEl.classList.add('has-ok');
+        } else {
+          overlapReportEl.classList.remove('has-ok');
+          const lineText = (e) => `⚠️ ${e.a} + ${e.b} — ${e.count} overlaps in ${windowLabel} (first at ${e.timePart} on ${e.monDate})`;
+          lastOverlapReportText = 'Overlap Report\n\n' + reportEntries.map(lineText).join('\n');
+          overlapReportEl.innerHTML = '<div class="overlap-report-title">Overlap Report</div>' + reportEntries.map(e =>
+            `<div class="overlap-report-line">⚠️ ${escapeHtml(e.a)} + ${escapeHtml(e.b)} — ${e.count} overlaps in ${escapeHtml(windowLabel)} (first at ${escapeHtml(e.timePart)} on ${escapeHtml(e.monDate)})</div>`
+          ).join('');
+        }
+        const existingFlock = overlapReportEl.querySelector('.overlap-report-flock-section');
+        if (existingFlock) existingFlock.remove();
+        const flockSection = document.createElement('div');
+        flockSection.className = 'overlap-report-flock-section';
+        validJobs.forEach((job, i) => {
+          const safeName = (job.name || 'job').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const cmd = (job.command || '').trim();
+          const flockLine = job.expression + ' flock -n /tmp/' + safeName + '.lock' + (cmd ? ' ' + cmd : '');
+          const row = document.createElement('div');
+          row.className = 'overlap-report-flock-job';
+          row.innerHTML = `
+            <div class="overlap-report-flock-job-head">
+              <span class="overlap-report-flock-job-name">${escapeHtml(job.name)}</span>
+              <label class="overlap-report-flock-label">
+                <input type="checkbox" data-flock-job-index="${i}" class="overlap-report-flock-checkbox" />
+                <span>Wrap with flock</span>
+              </label>
+            </div>
+            <pre class="overlap-report-flock-code" data-flock-job-index="${i}" style="display:none;"><code>${escapeHtml(flockLine)}</code></pre>
+          `;
+          flockSection.appendChild(row);
+        });
+        overlapReportEl.appendChild(flockSection);
+        flockSection.querySelectorAll('.overlap-report-flock-checkbox').forEach(function (cb) {
+          cb.addEventListener('change', function () {
+            const idx = this.getAttribute('data-flock-job-index');
+            const codeEl = flockSection.querySelector('.overlap-report-flock-code[data-flock-job-index="' + idx + '"]');
+            if (codeEl) codeEl.style.display = this.checked ? 'block' : 'none';
+          });
+        });
+      }
+
+      const canvas2d = document.createElement('canvas');
+      const ctx2d = canvas2d.getContext('2d');
+      ctx2d.font = 'bold 0.9rem JetBrains Mono, monospace';
+      const maxLabelPx = Math.max(...jobsWithOccurrences.map(j => ctx2d.measureText(j.name).width));
+      const labelWidth = Math.ceil(maxLabelPx) + 20;
+      const chartTop = 20;
+      const chartBottom = 60;
+      const chartRight = 20;
+      const ROW_HEIGHT = 40;
+      const laneHeights = jobsWithOccurrences.map(() => ROW_HEIGHT);
+      const chartHeight = laneHeights.reduce(function (a, b) { return a + b; }, 0);
+      const axisLabelAreaHeight = windowDays >= 3 ? 36 : 60;
+      const totalHeight = chartHeight + axisLabelAreaHeight + 20;
+      const panelRight = document.querySelector('.panel-right');
+      const availableWidth = (panelRight && panelRight.clientWidth > 0) ? panelRight.clientWidth - 32 : (containerEl.clientWidth > 0 ? containerEl.clientWidth - 32 : 800);
+      const width = Math.max(500, availableWidth);
+      const chartWidth = width - labelWidth - chartRight;
+      const totalWidth = width;
+      const xScale = (ms) => labelWidth + (chartWidth * (ms - windowStart)) / windowMs;
+      function laneY(index) {
+        let y = chartTop;
+        for (let j = 0; j < index; j++) y += laneHeights[j];
+        return y;
+      }
+      const numLanes = jobsWithOccurrences.length;
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', `0 0 ${totalWidth} ${totalHeight}`);
+      svg.setAttribute('width', '100%');
+      svg.setAttribute('height', totalHeight);
+
+      mergedBands.forEach(band => {
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', xScale(band.startMs));
+        rect.setAttribute('y', chartTop);
+        rect.setAttribute('width', Math.max(2, xScale(band.endMs) - xScale(band.startMs)));
+        rect.setAttribute('height', chartHeight);
+        rect.setAttribute('fill', COLOR_OVERLAP);
+        rect.setAttribute('opacity', '0.25');
+        svg.appendChild(rect);
+      });
+
+      jobsWithOccurrences.forEach((job, i) => {
+        const y = laneY(i);
+        const lh = laneHeights[i];
+        const barH = job.barHeight || 20;
+        const barY = y + (lh - barH) / 2;
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', labelWidth - 8);
+        label.setAttribute('y', y + lh / 2 + 4);
+        label.setAttribute('text-anchor', 'end');
+        label.setAttribute('fill', job.color);
+        label.setAttribute('font-size', '0.9rem');
+        label.setAttribute('font-weight', 'bold');
+        label.textContent = job.name;
+        svg.appendChild(label);
+
+        const laneRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        laneRect.setAttribute('x', labelWidth);
+        laneRect.setAttribute('y', y + 2);
+        laneRect.setAttribute('width', chartWidth);
+        laneRect.setAttribute('height', lh - 4);
+        laneRect.setAttribute('fill', 'rgba(255,255,255,0.03)');
+        laneRect.setAttribute('rx', '4');
+        svg.appendChild(laneRect);
+
+        const runsToDraw = job.sampleEvery > 1
+          ? job.runs.filter((_, i) => i % job.sampleEvery === 0)
+          : job.runs;
+        runsToDraw.forEach(r => {
+          const x1 = xScale(r.startMs);
+          const x2 = xScale(r.endMs);
+          const barWidthPx = (chartWidth * (r.endMs - r.startMs)) / windowMs;
+          const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          bar.setAttribute('x', x1);
+          bar.setAttribute('y', barY);
+          bar.setAttribute('width', Math.max(1, barWidthPx));
+          bar.setAttribute('height', barH);
+          bar.setAttribute('fill', job.color);
+          bar.setAttribute('rx', '2');
+          bar.style.cursor = 'pointer';
+          const jobName = job.name;
+          const formatted = formatOccurrenceTimeWithTz(new Date(r.startMs).toISOString());
+          bar.addEventListener('mouseenter', function (e) {
+            tooltipEl.textContent = `${jobName} — ${formatted}`;
+            tooltipEl.style.display = 'block';
+            tooltipEl.setAttribute('aria-hidden', 'false');
+            positionTooltip(e);
+          });
+          bar.addEventListener('mousemove', positionTooltip);
+          bar.addEventListener('mouseleave', function () {
+            tooltipEl.style.display = 'none';
+            tooltipEl.setAttribute('aria-hidden', 'true');
+          });
+          svg.appendChild(bar);
+        });
+      });
+
+      function positionTooltip(e) {
+        const offset = 10;
+        tooltipEl.style.left = `${e.clientX + offset}px`;
+        tooltipEl.style.top = `${e.clientY + offset}px`;
+      }
+
+      const axisPadding = 4;
+      const minLabelWidthPx = 40;
+      const xMin = labelWidth + axisPadding;
+      const xMax = labelWidth + chartWidth - axisPadding;
+      const usableChartWidth = chartWidth - 2 * axisPadding;
+      let labelStepMs;
+      if (windowDays <= 1.5) {
+        labelStepMs = 3 * 60 * 60 * 1000;
+      } else if (windowDays <= 4) {
+        labelStepMs = 6 * 60 * 60 * 1000;
+      } else if (windowDays <= 10) {
+        labelStepMs = 12 * 60 * 60 * 1000;
+      } else {
+        labelStepMs = 3 * 24 * 60 * 60 * 1000;
+      }
+      let tickMs = Math.ceil(windowStart / labelStepMs) * labelStepMs;
+      const ticks = [];
+      while (tickMs <= windowEnd) {
+        ticks.push(tickMs);
+        tickMs += labelStepMs;
+      }
+      while (ticks.length > 1 && usableChartWidth / ticks.length < minLabelWidthPx) {
+        labelStepMs *= 2;
+        tickMs = Math.ceil(windowStart / labelStepMs) * labelStepMs;
+        ticks.length = 0;
+        while (tickMs <= windowEnd) {
+          ticks.push(tickMs);
+          tickMs += labelStepMs;
+        }
+      }
+      const maxLabels = Math.floor(chartWidth / 80);
+      let ticksToShow = ticks;
+      if (ticks.length > maxLabels && maxLabels > 0) {
+        const step = (ticks.length - 1) / Math.max(1, maxLabels - 1);
+        ticksToShow = [];
+        for (let i = 0; i < maxLabels; i++) ticksToShow.push(ticks[Math.round(i * step)]);
+      }
+      const multiDayTwoLine = windowDays >= 3 && windowDays <= 10;
+      const multiDayDateOnly = windowDays > 10;
+      const axisY = chartTop + chartHeight;
+      ticksToShow.forEach(function (t, i) {
+        const x = xScale(t);
+        if (x < xMin || x > xMax) return;
+        const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        tick.setAttribute('x1', x);
+        tick.setAttribute('y1', axisY);
+        tick.setAttribute('x2', x);
+        tick.setAttribute('y2', axisY + 6);
+        tick.setAttribute('stroke', 'rgba(255,255,255,0.15)');
+        tick.setAttribute('stroke-width', '1');
+        tick.setAttribute('data-timeline-axis', 'tick');
+        svg.appendChild(tick);
+        const anchor = i === 0 && x - labelWidth < 20 ? 'start' : 'middle';
+        if (multiDayTwoLine) {
+          const dateLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          dateLabel.setAttribute('x', x);
+          dateLabel.setAttribute('y', axisY + 11);
+          dateLabel.setAttribute('text-anchor', anchor);
+          dateLabel.setAttribute('fill', '#c8cae0');
+          dateLabel.setAttribute('font-size', '11');
+          dateLabel.setAttribute('data-timeline-axis', 'label');
+          dateLabel.textContent = formatDateOnly(t, tzConfig);
+          svg.appendChild(dateLabel);
+          const timeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          timeLabel.setAttribute('x', x);
+          timeLabel.setAttribute('y', axisY + 28);
+          timeLabel.setAttribute('text-anchor', anchor);
+          timeLabel.setAttribute('fill', '#8a8fb5');
+          timeLabel.setAttribute('font-size', '10');
+          timeLabel.setAttribute('data-timeline-axis', 'label');
+          timeLabel.textContent = formatTimeOnly(t, tzConfig);
+          svg.appendChild(timeLabel);
+        } else {
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', x);
+          label.setAttribute('y', multiDayDateOnly ? axisY + 14 : axisY + 24);
+          label.setAttribute('text-anchor', anchor);
+          label.setAttribute('fill', '#c8cae0');
+          label.setAttribute('font-size', multiDayDateOnly ? '11' : '10');
+          label.setAttribute('data-timeline-axis', 'label');
+          label.textContent = multiDayDateOnly ? formatDateOnly(t, tzConfig) : formatAxisLabel(t, windowMs, tzConfig);
+          svg.appendChild(label);
+        }
+      });
+
+      const axisLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      axisLine.setAttribute('x1', labelWidth);
+      axisLine.setAttribute('y1', chartTop + chartHeight);
+      axisLine.setAttribute('x2', labelWidth + chartWidth);
+      axisLine.setAttribute('y2', chartTop + chartHeight);
+      axisLine.setAttribute('stroke', 'rgba(255,255,255,0.2)');
+      axisLine.setAttribute('stroke-width', '1');
+      axisLine.setAttribute('data-timeline-axis', 'line');
+      svg.insertBefore(axisLine, svg.firstChild);
+
+      const nowLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      const nowX = xScale(windowStart);
+      nowLine.setAttribute('x1', nowX);
+      nowLine.setAttribute('y1', chartTop);
+      nowLine.setAttribute('x2', nowX);
+      nowLine.setAttribute('y2', chartTop + chartHeight);
+      nowLine.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+      nowLine.setAttribute('stroke-width', '1');
+      nowLine.setAttribute('stroke-dasharray', '4 4');
+      svg.appendChild(nowLine);
+
+      containerEl.style.minHeight = totalHeight + 'px';
+      containerEl.appendChild(svg);
+      wrapperEl.classList.add('visible');
+
+      if (resolutionNoteEl) {
+        if (showReducedResolutionNote) {
+          resolutionNoteEl.textContent = '⚡ High-frequency jobs shown at reduced resolution';
+          resolutionNoteEl.style.display = 'block';
+          resolutionNoteEl.style.fontSize = '0.75rem';
+          resolutionNoteEl.style.color = '#8a8fb5';
+          resolutionNoteEl.style.marginTop = '0.5rem';
+        } else {
+          resolutionNoteEl.textContent = '';
+          resolutionNoteEl.style.display = 'none';
+        }
+      }
+    }
+
+    function mergeIntervals(intervals) {
+      if (intervals.length === 0) return [];
+      const sorted = intervals.slice().sort((a, b) => a.startMs - b.startMs);
+      const out = [sorted[0]];
+      for (let i = 1; i < sorted.length; i++) {
+        const last = out[out.length - 1];
+        if (sorted[i].startMs <= last.endMs) {
+          last.endMs = Math.max(last.endMs, sorted[i].endMs);
+        } else {
+          out.push(sorted[i]);
+        }
+      }
+      return out;
+    }
+
+    const SAMPLE_JOBS = `# Homelab crontab – paste and click Visualize
+backup        0 2 * * *
+logrotate     0 0 * * *
+db-clean      */15 * * * *
+health-ping   */5 * * * *
+api-check     */30 * * * *`;
+
+    btnSample.addEventListener('click', function () {
+      userOverrodeTimeline = false;
+      input.value = SAMPLE_JOBS;
+      errorEl.innerHTML = '';
+      errorEl.classList.remove('has-errors');
+    });
+    document.getElementById('btn-clear-paste').addEventListener('click', function () {
+      userOverrodeTimeline = false;
+      input.value = '';
+      hasVisualised = false;
+      resetTimelinePanel('paste');
+      updateControlsVisibility();
+      if (parsedJobsList) parsedJobsList.innerHTML = '';
+      if (errorEl) { errorEl.innerHTML = ''; errorEl.classList.remove('has-errors'); }
+      if (ignoredNoteEl) { ignoredNoteEl.style.display = 'none'; ignoredNoteEl.textContent = ''; }
+      try {
+        localStorage.removeItem(CC_CRON_PASTE);
+        localStorage.removeItem(CC_CRON_JOB_SETTINGS);
+      } catch (_) {}
+    });
+
+    function attachPasteSaveListener() {
+      const textarea = document.getElementById('cron-input');
+      if (!textarea) return;
+      let pasteSaveTimer;
+      textarea.addEventListener('input', function () {
+        if (pasteSaveTimer) clearTimeout(pasteSaveTimer);
+        pasteSaveTimer = setTimeout(function () {
+          try {
+            localStorage.setItem('cc-cron-paste', textarea.value);
+          } catch (_) {}
+          pasteSaveTimer = null;
+        }, 500);
+      });
+    }
+    function saveCronPasteToStorage() {
+      try {
+        const el = document.getElementById('cron-input');
+        if (el) localStorage.setItem('cc-cron-paste', el.value);
+      } catch (_) {}
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', attachPasteSaveListener);
+    } else {
+      attachPasteSaveListener();
+    }
+    window.addEventListener('beforeunload', saveCronPasteToStorage);
+
+    const quickExamples = document.querySelector('.quick-examples');
+    if (quickExamples) {
+      quickExamples.addEventListener('click', function (e) {
+        const btn = e.target.closest('.quick-example-btn');
+        if (!btn || !btn.dataset.line) return;
+        input.value = btn.dataset.line;
+        runVisualization();
+      });
+    }
+
+    (function buildModeInit() {
+      const tabBuild = document.getElementById('tab-build');
+      const tabPaste = document.getElementById('tab-paste');
+      const panelPaste = document.getElementById('panel-paste');
+      const panelBuild = document.getElementById('panel-build');
+      const buildContainer = document.getElementById('build-jobs-container');
+      const buildAddBtn = document.getElementById('build-add-job-btn');
+      const btnVisualizeBuild = document.getElementById('btn-visualize-build');
+      const MAX_BUILD_JOBS = 5;
+      const nextRunsExpanded = {};
+
+      const MINUTE_OPTS = [
+        { label: 'Every minute', val: '*' },
+        { label: 'Every 5 min', val: '*/5' },
+        { label: 'Every 10 min', val: '*/10' },
+        { label: 'Every 15 min', val: '*/15' },
+        { label: 'Every 30 min', val: '*/30' },
+        { label: 'At minute 0', val: '0' },
+        { label: 'Custom...', val: '__custom__' }
+      ];
+      const HOUR_OPTS = [
+        { label: 'Every hour', val: '*' },
+        { label: 'Every 2 hours', val: '*/2' },
+        { label: 'Every 6 hours', val: '*/6' },
+        { label: 'Every 12 hours', val: '*/12' },
+        { label: 'At midnight', val: '0' },
+        { label: 'At noon', val: '12' },
+        { label: 'Custom...', val: '__custom__' }
+      ];
+      const DAY_OPTS = [
+        { label: 'Every day', val: '*' },
+        { label: 'Every 2 days', val: '*/2' },
+        { label: 'Every week', val: '*/7' },
+        { label: '1st of month', val: '1' },
+        { label: '15th of month', val: '15' },
+        { label: 'Last day', val: '28' },
+        { label: 'Custom...', val: '__custom__' }
+      ];
+      const MONTH_OPTS = [
+        { label: 'Every month', val: '*' },
+        { label: 'Every 3 months', val: '*/3' },
+        { label: 'Every 6 months', val: '*/6' },
+        { label: 'Jan(1)', val: '1' }, { label: 'Feb(2)', val: '2' }, { label: 'Mar(3)', val: '3' }, { label: 'Apr(4)', val: '4' },
+        { label: 'May(5)', val: '5' }, { label: 'Jun(6)', val: '6' }, { label: 'Jul(7)', val: '7' }, { label: 'Aug(8)', val: '8' },
+        { label: 'Sep(9)', val: '9' }, { label: 'Oct(10)', val: '10' }, { label: 'Nov(11)', val: '11' }, { label: 'Dec(12)', val: '12' },
+        { label: 'Custom...', val: '__custom__' }
+      ];
+      const WEEKDAY_OPTS = [
+        { label: 'Every day', val: '*' },
+        { label: 'Monday(1)', val: '1' }, { label: 'Tuesday(2)', val: '2' }, { label: 'Wednesday(3)', val: '3' },
+        { label: 'Thursday(4)', val: '4' }, { label: 'Friday(5)', val: '5' }, { label: 'Saturday(6)', val: '6' }, { label: 'Sunday(0)', val: '0' },
+        { label: 'Weekdays (1-5)', val: '1-5' },
+        { label: 'Weekends (6,0)', val: '6,0' },
+        { label: 'Custom...', val: '__custom__' }
+      ];
+
+      function getBuildFieldVal(selectEl, customInput) {
+        const v = selectEl.value;
+        if (v === '__custom__' && customInput) return (customInput.value || '').trim();
+        return v === '__custom__' ? '' : v;
+      }
+
+      function buildExpressionFromRow(rowEl) {
+        const min = getBuildFieldVal(rowEl.querySelector('.build-min'), rowEl.querySelector('.build-custom-min'));
+        const hour = getBuildFieldVal(rowEl.querySelector('.build-hour'), rowEl.querySelector('.build-custom-hour'));
+        const day = getBuildFieldVal(rowEl.querySelector('.build-day'), rowEl.querySelector('.build-custom-day'));
+        const month = getBuildFieldVal(rowEl.querySelector('.build-month'), rowEl.querySelector('.build-custom-month'));
+        const dow = getBuildFieldVal(rowEl.querySelector('.build-dow'), rowEl.querySelector('.build-custom-dow'));
+        if (!min || !hour || !day || !month || !dow) return null;
+        return min + ' ' + hour + ' ' + day + ' ' + month + ' ' + dow;
+      }
+
+      function isValidExpression(expr) {
+        return isValidCronExpression(expr);
+      }
+
+      function matchCronField(fieldStr, value) {
+        const s = (fieldStr || '').trim();
+        if (s === '*') return true;
+        if (s.indexOf('*/') === 0) {
+          const n = parseInt(s.slice(2), 10);
+          return !isNaN(n) && n > 0 && value % n === 0;
+        }
+        if (s.indexOf(',') >= 0) {
+          const parts = s.split(',');
+          for (let i = 0; i < parts.length; i++) {
+            const p = parts[i].trim();
+            if (p.indexOf('-') >= 0) {
+              const dash = p.indexOf('-');
+              const a = parseInt(p.slice(0, dash), 10);
+              const b = parseInt(p.slice(dash + 1), 10);
+              if (!isNaN(a) && !isNaN(b) && value >= a && value <= b) return true;
+            } else {
+              const num = parseInt(p, 10);
+              if (!isNaN(num) && value === num) return true;
+            }
+          }
+          return false;
+        }
+        if (s.indexOf('-') >= 0) {
+          const dash = s.indexOf('-');
+          const a = parseInt(s.slice(0, dash), 10);
+          const b = parseInt(s.slice(dash + 1), 10);
+          return !isNaN(a) && !isNaN(b) && value >= a && value <= b;
+        }
+        const num = parseInt(s, 10);
+        return !isNaN(num) && value === num;
+      }
+
+      function getNextRun(minStr, hourStr, dayStr, monthStr, dowStr) {
+        const start = new Date();
+        const oneMin = 60 * 1000;
+        const maxIter = 525600;
+        for (let i = 0; i < maxIter; i++) {
+          const d = new Date(start.getTime() + i * oneMin);
+          const min = d.getMinutes();
+          const hour = d.getHours();
+          const dom = d.getDate();
+          const month = d.getMonth() + 1;
+          const dow = d.getDay();
+          if (matchCronField(minStr, min) && matchCronField(hourStr, hour) && matchCronField(dayStr, dom) && matchCronField(monthStr, month) && matchCronField(dowStr, dow)) {
+            return d;
+          }
+        }
+        return null;
+      }
+
+      function getNextRunTimes(minStr, hourStr, dayStr, monthStr, dowStr, count) {
+        const results = [];
+        const start = new Date();
+        const oneMin = 60 * 1000;
+        const maxIter = 525600;
+        let iter = 0;
+        let t = start.getTime();
+        while (results.length < count && iter < maxIter) {
+          const d = new Date(t);
+          const min = d.getMinutes();
+          const hour = d.getHours();
+          const dom = d.getDate();
+          const month = d.getMonth() + 1;
+          const dow = d.getDay();
+          if (matchCronField(minStr, min) && matchCronField(hourStr, hour) && matchCronField(dayStr, dom) && matchCronField(monthStr, month) && matchCronField(dowStr, dow)) {
+            results.push(new Date(t));
+          }
+          t += oneMin;
+          iter++;
+        }
+        return results;
+      }
+
+      function formatNextRunLine(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const h = String(date.getHours()).padStart(2, '0');
+        const min = String(date.getMinutes()).padStart(2, '0');
+        return y + '-' + m + '-' + d + ' at ' + h + ':' + min;
+      }
+
+      function formatNextRunLabel(date) {
+        const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const dow = weekdays[date.getDay()];
+        const mon = months[date.getMonth()];
+        const day = date.getDate();
+        let h = date.getHours();
+        const m = date.getMinutes();
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12;
+        if (h === 0) h = 12;
+        const minStr = m < 10 ? '0' + m : String(m);
+        return dow + ' ' + mon + ' ' + day + ' at ' + h + ':' + minStr + ' ' + ampm;
+      }
+
+      function updateRowPreview(rowEl) {
+        const expr = buildExpressionFromRow(rowEl);
+        const previewEl = rowEl.querySelector('.build-expr-preview');
+        const humanEl = rowEl.querySelector('.build-expr-human');
+        const invalidEl = rowEl.querySelector('.build-expr-invalid');
+        const nextRunEl = rowEl.querySelector('.build-next-run');
+        if (!previewEl) return;
+        if (!expr) {
+          previewEl.innerHTML = '—';
+          if (humanEl) humanEl.textContent = '';
+          if (invalidEl) { invalidEl.style.display = 'block'; invalidEl.textContent = 'Invalid expression'; }
+          if (nextRunEl) nextRunEl.style.display = 'none';
+          const nextRunsElNoExpr = rowEl.querySelector('.build-next-runs');
+          if (nextRunsElNoExpr) nextRunsElNoExpr.style.display = 'none';
+          return;
+        }
+        const minVal = getBuildFieldVal(rowEl.querySelector('.build-min'), rowEl.querySelector('.build-custom-min'));
+        const hourVal = getBuildFieldVal(rowEl.querySelector('.build-hour'), rowEl.querySelector('.build-custom-hour'));
+        const dayVal = getBuildFieldVal(rowEl.querySelector('.build-day'), rowEl.querySelector('.build-custom-day'));
+        const monthVal = getBuildFieldVal(rowEl.querySelector('.build-month'), rowEl.querySelector('.build-custom-month'));
+        const dowVal = getBuildFieldVal(rowEl.querySelector('.build-dow'), rowEl.querySelector('.build-custom-dow'));
+        if (!previewEl.querySelector('.expr-min')) {
+          previewEl.innerHTML = '<span class="expr-min"></span> <span class="expr-hour"></span> <span class="expr-day"></span> <span class="expr-month"></span> <span class="expr-weekday"></span>';
+        }
+        const setSpan = function (cls, val) { const s = previewEl.querySelector('.' + cls); if (s) s.textContent = val || '—'; };
+        setSpan('expr-min', minVal);
+        setSpan('expr-hour', hourVal);
+        setSpan('expr-day', dayVal);
+        setSpan('expr-month', monthVal);
+        setSpan('expr-weekday', dowVal);
+        if (invalidEl) invalidEl.style.display = 'none';
+        if (humanEl) {
+          try {
+            const human = typeof cronstrue !== 'undefined' && typeof cronstrue.toString === 'function' ? cronstrue.toString(expr) : (getCronstrue ? getCronstrue(expr) : '');
+            humanEl.textContent = human || '';
+          } catch (_) {
+            humanEl.textContent = '';
+          }
+        }
+        const valid = isValidExpression(expr);
+        if (!valid) {
+          if (invalidEl) { invalidEl.style.display = 'block'; invalidEl.textContent = 'Invalid expression'; }
+          if (nextRunEl) nextRunEl.style.display = 'none';
+          const nextRunsEl = rowEl.querySelector('.build-next-runs');
+          if (nextRunsEl) { nextRunsEl.style.display = 'none'; }
+          return;
+        }
+        const nextRunsEl = rowEl.querySelector('.build-next-runs');
+        const nextRunsSummary = rowEl.querySelector('.build-next-runs-summary');
+        if (nextRunsEl && nextRunsSummary) {
+          nextRunsEl.style.display = 'block';
+          recalcNextRuns(rowEl.id);
+        }
+        if (nextRunEl) nextRunEl.style.display = 'none';
+      }
+
+      function doNextRunsForRow(rowEl) {
+        const expr = buildExpressionFromRow(rowEl);
+        if (!expr || !isValidExpression(expr)) {
+          const el = rowEl.querySelector('.build-next-runs');
+          if (el) el.style.display = 'none';
+          return;
+        }
+        const nextRunsEl = rowEl.querySelector('.build-next-runs');
+        const nextRunsSummary = rowEl.querySelector('.build-next-runs-summary');
+        if (!nextRunsEl || !nextRunsSummary) return;
+        const min = getBuildFieldVal(rowEl.querySelector('.build-min'), rowEl.querySelector('.build-custom-min'));
+        const hour = getBuildFieldVal(rowEl.querySelector('.build-hour'), rowEl.querySelector('.build-custom-hour'));
+        const day = getBuildFieldVal(rowEl.querySelector('.build-day'), rowEl.querySelector('.build-custom-day'));
+        const month = getBuildFieldVal(rowEl.querySelector('.build-month'), rowEl.querySelector('.build-custom-month'));
+        const dow = getBuildFieldVal(rowEl.querySelector('.build-dow'), rowEl.querySelector('.build-custom-dow'));
+        const times = getNextRunTimes(min, hour, day, month, dow, 5);
+        nextRunsEl.style.display = 'block';
+        if (times.length === 0) {
+          nextRunsSummary.textContent = 'No runs in next 12 months';
+          nextRunsSummary.className = 'build-next-runs-summary build-next-runs-empty';
+          const expandedPanelEmpty = rowEl.querySelector('.build-next-runs-expanded');
+          if (expandedPanelEmpty) { expandedPanelEmpty.innerHTML = ''; expandedPanelEmpty.hidden = true; }
+        } else {
+          nextRunsSummary.textContent = 'Next run: ' + formatNextRunLine(times[0]);
+          nextRunsSummary.className = 'build-next-runs-summary';
+          const expandedPanel = rowEl.querySelector('.build-next-runs-expanded');
+          if (expandedPanel) {
+            expandedPanel.innerHTML = times.slice(1).map(function (date) {
+              return '<div class="build-next-runs-line"><span class="build-next-runs-label">then</span>  ' + formatNextRunLine(date) + '</div>';
+            }).join('');
+            const jobId = rowEl.id;
+            const isExpanded = nextRunsExpanded[jobId];
+            expandedPanel.hidden = !isExpanded;
+          }
+          const toggleBtn = rowEl.querySelector('.build-next-runs-toggle');
+          if (toggleBtn) {
+            const jobId = rowEl.id;
+            const isExpanded = nextRunsExpanded[jobId];
+            toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+            toggleBtn.textContent = isExpanded ? '▲' : '▼';
+          }
+        }
+      }
+
+      const recalcNextRuns = debounce(function (jobId) {
+        const row = document.getElementById(jobId);
+        if (row) doNextRunsForRow(row);
+      }, 150);
+
+      const debounceRender = debounce(function () {
+        if (panelBuild && !panelBuild.hidden) {
+          input.value = getBuildJobsCrontabText();
+          runVisualization(undefined, 1440);
+        }
+      }, 300);
+
+      function toggleCustomInput(selectEl, customWrap) {
+        if (!customWrap) return;
+        const show = selectEl.value === '__custom__';
+        customWrap.style.display = show ? 'block' : 'none';
+        const hint = customWrap.nextElementSibling;
+        if (hint && hint.classList && hint.classList.contains('build-custom-hint')) hint.style.display = show ? 'block' : 'none';
+      }
+
+      function createJobRow(index) {
+        const color = LANE_COLORS[index % LANE_COLORS.length];
+        const row = document.createElement('div');
+        row.className = 'build-job-row';
+        row.style.borderLeftColor = color;
+        row.style.borderLeftWidth = '4px';
+        row.style.borderLeftStyle = 'solid';
+        row.dataset.jobIndex = String(index);
+        const nameId = 'build-job-name-' + index;
+        const rowId = 'build-job-row-' + index;
+        row.id = rowId;
+        nextRunsExpanded[rowId] = false;
+        row.innerHTML =
+          '<div class="build-job-name-row"><label for="' + nameId + '">Job Name:</label><input type="text" id="' + nameId + '" class="build-job-name" placeholder="backup" value="job-' + (index + 1) + '"><button type="button" class="build-delete-job-btn" aria-label="Delete job">✕</button></div>' +
+          '<div class="build-expr-row"><div class="build-expr-box"><div class="build-expr-preview" aria-live="polite"><span class="expr-min">*/15</span> <span class="expr-hour">*</span> <span class="expr-day">*</span> <span class="expr-month">*</span> <span class="expr-weekday">*</span></div></div><button type="button" class="build-copy-expr-btn" aria-label="Copy expression">Copy</button></div>' +
+          '<div class="build-fields-row">' +
+          '<div class="build-field-wrap"><label>Minute</label><select class="build-min"><option value="*">Every minute (*)</option><option value="*/5">Every 5 min (*/5)</option><option value="*/10">Every 10 min (*/10)</option><option value="*/15" selected>Every 15 min (*/15)</option><option value="*/30">Every 30 min (*/30)</option><optgroup label="── specific minutes ──"><option value="0">At minute 0 (0)</option><option value="15">At minute 15 (15)</option><option value="30">At minute 30 (30)</option><option value="45">At minute 45 (45)</option></optgroup><option value="__custom__">Custom...</option></select><input type="text" class="build-custom build-custom-min" style="display:none;margin-top:0.25rem" placeholder="e.g. */15"><span class="build-custom-hint" style="display:none">0-59, or */5 for every 5 min</span></div>' +
+          '<div class="build-field-wrap"><label>Hour</label><select class="build-hour"><option value="*" selected>Every hour (*)</option><option value="*/2">Every 2 hours (*/2)</option><option value="*/6">Every 6 hours (*/6)</option><option value="*/12">Every 12 hours (*/12)</option><optgroup label="── specific hours ──"></optgroup><option value="0">At midnight (0)</option><option value="1">At 1 AM (1)</option><option value="2">At 2 AM (2)</option><option value="3">At 3 AM (3)</option><option value="6">At 6 AM (6)</option><option value="9">At 9 AM (9)</option><option value="12">At noon (12)</option><option value="18">At 6 PM (18)</option><option value="22">At 10 PM (22)</option><option value="__custom__">Custom...</option></select><input type="text" class="build-custom build-custom-hour" style="display:none;margin-top:0.25rem" placeholder="e.g. 2"><span class="build-custom-hint" style="display:none">0-23, or */2 for every 2 hours</span></div>' +
+          '<div class="build-field-wrap"><label>Day</label><select class="build-day"><option value="*" selected>Every day (*)</option><option value="*/2">Every 2 days (*/2)</option><option value="*/7">Every 7 days (*/7)</option><optgroup label="── specific days ──"><option value="1">1st (1)</option><option value="2">2nd (2)</option><option value="5">5th (5)</option><option value="10">10th (10)</option><option value="15">15th (15)</option><option value="20">20th (20)</option><option value="25">25th (25)</option><option value="28">Last common (28)</option></optgroup><option value="__custom__">Custom...</option></select><input type="text" class="build-custom build-custom-day" style="display:none;margin-top:0.25rem" placeholder="e.g. 1"><span class="build-custom-hint" style="display:none">1-31, or */7 for weekly</span></div>' +
+          '<div class="build-field-wrap"><label>Month</label><select class="build-month"><option value="*" selected>Every month (*)</option><option value="*/3">Every 3 months (*/3)</option><option value="*/6">Every 6 months (*/6)</option><optgroup label="── specific months ──"><option value="1">January (1)</option><option value="2">February (2)</option><option value="3">March (3)</option><option value="4">April (4)</option><option value="5">May (5)</option><option value="6">June (6)</option><option value="7">July (7)</option><option value="8">August (8)</option><option value="9">September (9)</option><option value="10">October (10)</option><option value="11">November (11)</option><option value="12">December (12)</option></optgroup><option value="__custom__">Custom...</option></select><input type="text" class="build-custom build-custom-month" style="display:none;margin-top:0.25rem" placeholder="e.g. 1"><span class="build-custom-hint" style="display:none">1-12 or JAN-DEC</span></div>' +
+          '<div class="build-field-wrap"><label>Weekday</label><select class="build-dow"><option value="*" selected>Every day (*)</option><option value="1-5">Weekdays (1-5)</option><option value="6,0">Weekends (6,0)</option><optgroup label="── specific days ──"><option value="0">Sunday (0)</option><option value="1">Monday (1)</option><option value="2">Tuesday (2)</option><option value="3">Wednesday (3)</option><option value="4">Thursday (4)</option><option value="5">Friday (5)</option><option value="6">Saturday (6)</option></optgroup><option value="__custom__">Custom...</option></select><input type="text" class="build-custom build-custom-dow" style="display:none;margin-top:0.25rem" placeholder="e.g. 1-5"><span class="build-custom-hint" style="display:none">0-7 (0 and 7 = Sunday), or MON-SUN</span></div>' +
+          '</div>' +
+          '<div class="build-expr-human" style="font-size:0.8125rem;color:rgba(255,255,255,0.7);margin-top:0.25rem"></div>' +
+          '<p class="build-expr-invalid" style="display:none;color:#f97316;font-size:0.8125rem;margin-top:0.25rem"></p>' +
+          '<div class="build-next-run" aria-live="polite"></div>' +
+          '<div class="build-next-runs" aria-live="polite">' +
+          '<div class="build-next-runs-header"><span class="build-next-runs-summary"></span><button type="button" class="build-next-runs-toggle" aria-label="Show more runs" aria-expanded="false">▼</button></div>' +
+          '<div class="build-next-runs-expanded" hidden></div>' +
+          '</div>';
+        const copyExprBtn = row.querySelector('.build-copy-expr-btn');
+        if (copyExprBtn) {
+          copyExprBtn.addEventListener('click', function () {
+            const expr = buildExpressionFromRow(row);
+            if (!expr) return;
+            const nameInput = row.querySelector('.build-job-name');
+            const jobName = (nameInput && nameInput.value.trim()) || '';
+            const text = jobName ? '# ' + jobName + '\n' + expr : expr;
+            const label = copyExprBtn.textContent;
+            navigator.clipboard.writeText(text).then(function () {
+              copyExprBtn.textContent = 'Copied!';
+              setTimeout(function () { copyExprBtn.textContent = label; }, 1500);
+            });
+          });
+        }
+        const nextRunsToggle = row.querySelector('.build-next-runs-toggle');
+        if (nextRunsToggle) {
+          const expandedPanel = row.querySelector('.build-next-runs-expanded');
+          nextRunsToggle.addEventListener('click', function () {
+            const jobId = row.id;
+            const expanded = nextRunsToggle.getAttribute('aria-expanded') === 'true';
+            if (expanded) {
+              nextRunsExpanded[jobId] = false;
+              nextRunsToggle.setAttribute('aria-expanded', 'false');
+              nextRunsToggle.textContent = '▼';
+              if (expandedPanel) expandedPanel.hidden = true;
+            } else {
+              nextRunsExpanded[jobId] = true;
+              nextRunsToggle.setAttribute('aria-expanded', 'true');
+              nextRunsToggle.textContent = '▲';
+              if (expandedPanel) expandedPanel.hidden = false;
+            }
+          });
+        }
+        ['min', 'hour', 'day', 'month', 'dow'].forEach(function (field) {
+          const sel = row.querySelector('.build-' + field);
+          const customWrap = row.querySelector('.build-custom-' + field);
+          const exprCls = 'expr-' + (field === 'dow' ? 'weekday' : field);
+          if (sel) {
+            sel.addEventListener('change', function () {
+              toggleCustomInput(sel, customWrap);
+              updateRowPreview(row);
+              hasUserEditedBuild = true;
+              saveBuildToStorage();
+              debounceRender();
+            });
+            sel.addEventListener('focus', function () {
+              row.querySelectorAll('.expr-min, .expr-hour, .expr-day, .expr-month, .expr-weekday').forEach(function (s) { s.classList.remove('expr-highlight'); });
+              const span = row.querySelector('.' + exprCls);
+              if (span) span.classList.add('expr-highlight');
+            });
+            sel.addEventListener('change', function () {
+              row.querySelectorAll('.expr-min, .expr-hour, .expr-day, .expr-month, .expr-weekday').forEach(function (s) { s.classList.remove('expr-highlight'); });
+              const span = row.querySelector('.' + exprCls);
+              if (span) span.classList.add('expr-highlight');
+            });
+            sel.addEventListener('blur', function () {
+              const span = row.querySelector('.' + exprCls);
+              if (row._exprHighlightTimeout) clearTimeout(row._exprHighlightTimeout);
+              row._exprHighlightTimeout = setTimeout(function () {
+                if (span) span.classList.remove('expr-highlight');
+                row._exprHighlightTimeout = null;
+              }, 1500);
+            });
+          }
+          if (customWrap) {
+            customWrap.addEventListener('input', function () {
+              updateRowPreview(row);
+              hasUserEditedBuild = true;
+              saveBuildToStorage();
+              debounceRender();
+            });
+            customWrap.addEventListener('focus', function () {
+              row.querySelectorAll('.expr-min, .expr-hour, .expr-day, .expr-month, .expr-weekday').forEach(function (s) { s.classList.remove('expr-highlight'); });
+              const span = row.querySelector('.' + exprCls);
+              if (span) span.classList.add('expr-highlight');
+            });
+            customWrap.addEventListener('blur', function () {
+              const span = row.querySelector('.' + exprCls);
+              if (row._exprHighlightTimeout) clearTimeout(row._exprHighlightTimeout);
+              row._exprHighlightTimeout = setTimeout(function () {
+                if (span) span.classList.remove('expr-highlight');
+                row._exprHighlightTimeout = null;
+              }, 1500);
+            });
+          }
+        });
+        const nameInputRow = row.querySelector('.build-job-name');
+        if (nameInputRow) {
+          nameInputRow.addEventListener('input', function () {
+            hasUserEditedBuild = true;
+            saveBuildToStorage();
+            debounceRender();
+          });
+        }
+        const deleteBtn = row.querySelector('.build-delete-job-btn');
+        if (deleteBtn) {
+          deleteBtn.addEventListener('click', function () {
+            if (buildContainer.querySelectorAll('.build-job-row').length <= 1) return;
+            delete nextRunsExpanded[row.id];
+            row.remove();
+            buildContainer.querySelectorAll('.build-job-row').forEach(function (r, i) {
+              r.dataset.jobIndex = String(i);
+              const nameInput = r.querySelector('.build-job-name');
+              if (nameInput) nameInput.value = 'job-' + (i + 1);
+            });
+            updateBuildDeleteButtonsVisibility();
+            hasUserEditedBuild = true;
+            saveBuildToStorage();
+            input.value = getBuildJobsCrontabText();
+            runVisualization(undefined, 1440);
+          });
+        }
+        updateRowPreview(row);
+        updateBuildDeleteButtonsVisibility();
+        return row;
+      }
+
+      function updateBuildDeleteButtonsVisibility() {
+        const rows = buildContainer.querySelectorAll('.build-job-row');
+        const showDelete = rows.length > 1;
+        rows.forEach(function (r) {
+          const delBtn = r.querySelector('.build-delete-job-btn');
+          if (delBtn) delBtn.style.display = showDelete ? '' : 'none';
+        });
+      }
+
+      function addJobRow() {
+        const current = buildContainer.querySelectorAll('.build-job-row').length;
+        if (current >= MAX_BUILD_JOBS) return;
+        hasUserEditedBuild = true;
+        buildContainer.appendChild(createJobRow(current));
+        buildAddBtn.style.display = buildContainer.querySelectorAll('.build-job-row').length >= MAX_BUILD_JOBS ? 'none' : 'block';
+        updateBuildDeleteButtonsVisibility();
+        saveBuildToStorage();
+      }
+
+      function getBuildJobsCrontabText() {
+        const rows = buildContainer.querySelectorAll('.build-job-row');
+        const lines = [];
+        rows.forEach(function (row) {
+          const nameInput = row.querySelector('.build-job-name');
+          const name = (nameInput && nameInput.value.trim()) || ('job-' + (row.dataset.jobIndex || 0));
+          const expr = buildExpressionFromRow(row);
+          if (expr && isValidExpression(expr)) lines.push(name + ' ' + expr);
+        });
+        return lines.join('\n');
+      }
+
+      function getBuildJobsCrontabBlocks() {
+        const rows = buildContainer.querySelectorAll('.build-job-row');
+        const blocks = [];
+        rows.forEach(function (row) {
+          const nameInput = row.querySelector('.build-job-name');
+          const name = (nameInput && nameInput.value.trim()) || ('job-' + (row.dataset.jobIndex || 0));
+          const expr = buildExpressionFromRow(row);
+          if (expr && isValidExpression(expr)) blocks.push('# ' + name + '\n' + expr);
+        });
+        return blocks.join('\n\n');
+      }
+
+      const BUILD_STORAGE_KEY = 'cron-builder-jobs';
+      let hasUserEditedBuild = false;
+
+      function getBuildState() {
+        const rows = buildContainer.querySelectorAll('.build-job-row');
+        const state = [];
+        rows.forEach(function (row) {
+          const nameInput = row.querySelector('.build-job-name');
+          const name = (nameInput && nameInput.value.trim()) || '';
+          const min = getBuildFieldVal(row.querySelector('.build-min'), row.querySelector('.build-custom-min'));
+          const hour = getBuildFieldVal(row.querySelector('.build-hour'), row.querySelector('.build-custom-hour'));
+          const day = getBuildFieldVal(row.querySelector('.build-day'), row.querySelector('.build-custom-day'));
+          const month = getBuildFieldVal(row.querySelector('.build-month'), row.querySelector('.build-custom-month'));
+          const dow = getBuildFieldVal(row.querySelector('.build-dow'), row.querySelector('.build-custom-dow'));
+          state.push({ name: name || ('job-' + (row.dataset.jobIndex || 0)), min: min || '*', hour: hour || '*', day: day || '*', month: month || '*', dow: dow || '*' });
+        });
+        return state;
+      }
+
+      function saveBuildToStorage() {
+        if (!hasUserEditedBuild) return;
+        try {
+          const state = getBuildState();
+          localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(state));
+        } catch (_) {}
+      }
+
+      function setBuildRowValues(row, opts) {
+        const nameInput = row.querySelector('.build-job-name');
+        if (nameInput && opts.name != null) nameInput.value = opts.name;
+        const fields = ['min', 'hour', 'day', 'month', 'dow'];
+        const keys = ['min', 'hour', 'day', 'month', 'dow'];
+        keys.forEach(function (key, i) {
+          const val = opts[key];
+          if (val == null) return;
+          const sel = row.querySelector('.build-' + (key === 'dow' ? 'dow' : key));
+          const customWrap = row.querySelector('.build-custom-' + (key === 'dow' ? 'dow' : key));
+          if (!sel) return;
+          if (sel.querySelector('option[value="' + val + '"]')) {
+            sel.value = val;
+            if (sel.value !== val) {
+              for (let _i = 0; _i < sel.options.length; _i++) {
+                if (sel.options[_i].value === val) { sel.selectedIndex = _i; break; }
+              }
+            }
+            if (customWrap) { customWrap.style.display = 'none'; customWrap.value = ''; }
+          } else {
+            sel.value = '__custom__';
+            if (customWrap) { customWrap.style.display = 'block'; customWrap.value = val; }
+            toggleCustomInput(sel, customWrap);
+          }
+        });
+      }
+
+      function loadBuildFromStorage() {
+        if (SHARED_CRONTAB) return;
+        try {
+          const raw = localStorage.getItem(BUILD_STORAGE_KEY);
+          if (!raw) return;
+          const state = JSON.parse(raw);
+          if (!Array.isArray(state) || state.length === 0) return;
+          hasUserEditedBuild = true;
+          buildContainer.innerHTML = '';
+          state.forEach(function (item, i) {
+            const row = createJobRow(i);
+            buildContainer.appendChild(row);
+            setBuildRowValues(row, item);
+            updateRowPreview(row);
+          });
+          updateBuildDeleteButtonsVisibility();
+          buildAddBtn.style.display = buildContainer.querySelectorAll('.build-job-row').length >= MAX_BUILD_JOBS ? 'none' : 'block';
+          setTimeout(function () {
+            if (panelBuild && panelBuild.hidden) return;
+            const text = getBuildJobsCrontabText();
+            if (text) {
+              input.value = text;
+              runVisualization(undefined, 1440);
+              hasVisualised = true;
+              updateControlsVisibility();
+            }
+          }, 300);
+        } catch (_) {}
+      }
+
+      function addExampleHintToRow(row) {
+        const humanEl = row.querySelector('.build-expr-human');
+        if (!humanEl) return;
+        const hint = document.createElement('p');
+        hint.className = 'build-example-hint';
+        hint.style.cssText = 'font-size:0.72rem;color:#8a8fb5;font-style:italic;margin-top:0.25rem';
+        hint.textContent = 'Example job — edit or clear to add your own';
+        humanEl.insertAdjacentElement('afterend', hint);
+        function removeExampleHint() {
+          const h = row.querySelector('.build-example-hint');
+          if (h) h.remove();
+        }
+        const nameInput = row.querySelector('.build-job-name');
+        if (nameInput) nameInput.addEventListener('input', removeExampleHint);
+        row.querySelectorAll('.build-min, .build-hour, .build-day, .build-month, .build-dow').forEach(function (sel) {
+          sel.addEventListener('change', removeExampleHint);
+        });
+        row.querySelectorAll('.build-custom-min, .build-custom-hour, .build-custom-day, .build-custom-month, .build-custom-dow').forEach(function (inp) {
+          if (inp) inp.addEventListener('input', removeExampleHint);
+        });
+      }
+
+      function loadExampleJobs() {
+        if (SHARED_CRONTAB) return;
+        buildContainer.innerHTML = '';
+
+        const row1 = createJobRow(0);
+        buildContainer.appendChild(row1);
+        setBuildRowValues(row1, { name: 'health-ping', min: '*/5', hour: '*', day: '*', month: '*', dow: '*' });
+        updateRowPreview(row1);
+        addExampleHintToRow(row1);
+
+        const row2 = createJobRow(1);
+        buildContainer.appendChild(row2);
+        setBuildRowValues(row2, { name: 'backup', min: '0', hour: '2', day: '*', month: '*', dow: '*' });
+        updateRowPreview(row2);
+        addExampleHintToRow(row2);
+
+        updateBuildDeleteButtonsVisibility();
+
+        setTimeout(function () {
+          if (panelBuild && panelBuild.hidden) return;
+          const text = getBuildJobsCrontabText();
+          if (text) {
+            input.value = text;
+            runVisualization(undefined, 1440);
+            hasVisualised = true;
+            updateControlsVisibility();
+          }
+        }, 400);
+      }
+
+      function activateBuildTab() {
+        tabPaste.classList.remove('active');
+        tabPaste.setAttribute('aria-selected', 'false');
+        tabBuild.classList.add('active');
+        tabBuild.setAttribute('aria-selected', 'true');
+        panelPaste.hidden = true;
+        panelBuild.hidden = false;
+        if (timelineActionsLeft) timelineActionsLeft.style.display = 'none';
+        resetTimelinePanel('build');
+      }
+      function activatePasteTab() {
+        tabBuild.classList.remove('active');
+        tabBuild.setAttribute('aria-selected', 'false');
+        tabPaste.classList.add('active');
+        tabPaste.setAttribute('aria-selected', 'true');
+        panelBuild.hidden = true;
+        panelPaste.hidden = false;
+        if (timelineActionsLeft) timelineActionsLeft.style.display = '';
+        resetTimelinePanel('paste');
+      }
+      if (tabBuild && tabPaste && panelPaste && panelBuild) {
+        tabBuild.addEventListener('click', function (e) {
+          e.preventDefault();
+          activateBuildTab();
+          try { localStorage.setItem(CC_ACTIVE_TAB_KEY, 'build'); } catch (_) {}
+        });
+        tabPaste.addEventListener('click', function (e) {
+          e.preventDefault();
+          activatePasteTab();
+          try { localStorage.setItem(CC_ACTIVE_TAB_KEY, 'paste'); } catch (_) {}
+        });
+      }
+      if (timelineActionsLeft && panelBuild && !panelBuild.hidden) timelineActionsLeft.style.display = 'none';
+
+      if (buildContainer) {
+        const _savedState = localStorage.getItem(BUILD_STORAGE_KEY);
+        let _shouldLoadFromStorage = false;
+        if (_savedState) {
+          try {
+            const _parsed = JSON.parse(_savedState);
+            if (Array.isArray(_parsed) && _parsed.length > 0 && _parsed.some(function(j) { return j.name !== 'health-ping' && j.name !== 'backup'; })) {
+              _shouldLoadFromStorage = true;
+            } else if (Array.isArray(_parsed) && _parsed.length > 0 && _parsed.some(function(j) { return j.name === 'health-ping' || j.name === 'backup'; })) {
+              localStorage.removeItem(BUILD_STORAGE_KEY);
+            }
+          } catch(_) { localStorage.removeItem(BUILD_STORAGE_KEY); }
+        }
+        if (_shouldLoadFromStorage) {
+          loadBuildFromStorage();
+        } else {
+          loadExampleJobs();
+        }
+      }
+      if (placeholderEl && panelBuild && !panelBuild.hidden) {
+        placeholderEl.textContent = 'Add jobs and click Visualise.';
+      }
+      if (buildAddBtn) {
+        buildAddBtn.addEventListener('click', addJobRow);
+      }
+      const buildCopyAllCrontabBtn = document.getElementById('build-copy-all-crontab-btn');
+      if (buildCopyAllCrontabBtn) {
+        buildCopyAllCrontabBtn.addEventListener('click', function () {
+          const text = getBuildJobsCrontabBlocks();
+          if (!text) return;
+          const label = buildCopyAllCrontabBtn.textContent;
+          navigator.clipboard.writeText(text).then(function () {
+            buildCopyAllCrontabBtn.textContent = 'Copied!';
+            setTimeout(function () { buildCopyAllCrontabBtn.textContent = label; }, 1500);
+          });
+        });
+      }
+      if (!SHARED_CRONTAB) {
+        try {
+          const savedTab = localStorage.getItem(CC_ACTIVE_TAB_KEY);
+          if (savedTab === 'paste') activatePasteTab();
+        } catch(_) {}
+      }
+      const btnVisualizeTab = document.getElementById('btn-visualize-tab');
+      if (btnVisualizeTab) {
+        btnVisualizeTab.addEventListener('click', function () {
+          hasVisualised = true;
+          updateControlsVisibility();
+          if (panelBuild.hidden) {
+            runVisualization();
+            try {
+              const encoded = btoa(unescape(encodeURIComponent(input.value)));
+              const params = new URLSearchParams(location.search);
+              params.set('jobs', encoded);
+              const newUrl = location.pathname + '?' + params.toString();
+              history.replaceState(null, '', newUrl);
+            } catch (_) {}
+          } else {
+            const text = getBuildJobsCrontabText();
+            if (!text) return;
+            input.value = text;
+            runVisualization(undefined, 1440);
+          }
+        });
+      }
+    })();
+
+    const btnShareTimeline = document.getElementById('btn-share-timeline');
+    const btnExportPng = document.getElementById('btn-export-png');
+    const btnCopyReport = document.getElementById('btn-copy-report');
+    if (btnShareTimeline) {
+      btnShareTimeline.addEventListener('click', function () {
+        const crontabText = document.getElementById('cron-input').value.trim();
+        if (!crontabText) return;
+        const encoded = btoa(unescape(encodeURIComponent(crontabText)));
+        const url = 'https://configclarity.dev/crontab/?crontab=' + encodeURIComponent(encoded);
+        navigator.clipboard.writeText(url).then(function () {
+          const shareToast = document.getElementById('share-toast');
+          if (shareToast) {
+            shareToast.hidden = false;
+            setTimeout(function () { shareToast.hidden = true; }, 2000);
+          }
+        }).catch(function () {
+          alert('Could not copy link. Please copy the URL from your address bar.');
+        });
+      });
+    }
+    if (btnExportPng) {
+      btnExportPng.addEventListener('click', function () {
+        const wrapper = document.getElementById('timeline-wrapper');
+        if (!wrapper || typeof window.html2canvas !== 'function') return;
+        btnExportPng.disabled = true;
+        const axisEls = wrapper.querySelectorAll('[data-timeline-axis]');
+        const saved = [];
+        axisEls.forEach(function (el) {
+          if (el.getAttribute('stroke')) {
+            saved.push({ el: el, type: 'stroke', val: el.getAttribute('stroke') });
+            el.setAttribute('stroke', 'rgba(255,255,255,0.85)');
+          }
+          if (el.getAttribute('fill')) {
+            saved.push({ el: el, type: 'fill', val: el.getAttribute('fill') });
+            el.setAttribute('fill', '#ffffff');
+          }
+        });
+        const pad = 12;
+        window.html2canvas(wrapper, {
+          backgroundColor: '#0f1117',
+          scale: 2,
+          x: 0,
+          y: 0,
+          width: wrapper.offsetWidth,
+          height: wrapper.offsetHeight
+        }).then(function (canvas) {
+          saved.forEach(function (s) {
+            if (s.type === 'stroke') s.el.setAttribute('stroke', s.val);
+            else s.el.setAttribute('fill', s.val);
+          });
+          const w = canvas.width + pad * 2;
+          const h = canvas.height + pad * 2;
+          const out = document.createElement('canvas');
+          out.width = w;
+          out.height = h;
+          const ctx = out.getContext('2d');
+          ctx.fillStyle = '#0f1117';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(canvas, pad, pad);
+          out.toBlob(function (blob) {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'configclarity-cron-timeline.png';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          }, 'image/png');
+        }).catch(function () {}).finally(function () {
+          saved.forEach(function (s) {
+            if (s.type === 'stroke') s.el.setAttribute('stroke', s.val);
+            else s.el.setAttribute('fill', s.val);
+          });
+          btnExportPng.disabled = false;
+        });
+      });
+    }
+    if (btnCopyReport) {
+      btnCopyReport.addEventListener('click', function () {
+        if (lastOverlapReportText) {
+          navigator.clipboard.writeText(lastOverlapReportText).then(() => {
+            const t = btnCopyReport.textContent;
+            btnCopyReport.textContent = 'Copied!';
+            setTimeout(() => { btnCopyReport.textContent = t; }, 2000);
+          }).catch(() => {});
+        }
+      });
+    }
+
+    function parseSystemdTimersToCron(text) {
+      const results = [];
+      const seen = {};
+      let skipped = 0;
+      const lines = (text || '').split(/\r?\n/);
+
+      const KNOWN_TIMERS = {
+        'logrotate': '0 0 * * *',
+        'fstrim': '0 0 * * 0',
+        'updatedb': '0 0 * * *',
+        'man-db': '0 0 * * *',
+        'apt-daily': '0 6,18 * * *',
+        'apt-daily-upgrade': '0 6 * * *',
+        'backup': '0 2 * * *',
+        'certbot': '0 0,12 * * *',
+        'snapd': '0 * * * *',
+        'systemd-tmpfiles-clean': '0 0 * * *'
+      };
+
+      function onCalendarToCron(val) {
+        const v = (val || '').trim().toLowerCase();
+        if (v === 'daily') return '0 0 * * *';
+        if (v === 'hourly') return '0 * * * *';
+        if (v === 'weekly') return '0 0 * * 0';
+        if (v === 'monthly') return '0 0 1 * *';
+        if (/^\*:0\/15$/i.test(v)) return '*/15 * * * *';
+        if (/^\*:0\/30$/i.test(v)) return '*/30 * * * *';
+        if (/^\*:0\/5$/i.test(v)) return '*/5 * * * *';
+        const m1 = v.match(/^\*-\*-\*\s+(\d{2}):(\d{2}):\d{2}$/i);
+        if (m1) return m1[2] + ' ' + m1[1] + ' * * *';
+        return null;
+      }
+
+      let currentUnit = null;
+      let unitFileIndex = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const idMatch = line.match(/Id=([^\s]+\.timer)/i);
+        if (idMatch) currentUnit = idMatch[1].replace(/\.timer$/i, '');
+        const onCalMatch = line.match(/OnCalendar=\s*(.+?)(?:\s*$|\s*#|\s+[A-Z])/i) || line.match(/OnCalendar=(.+)/i);
+        if (onCalMatch) {
+          const cal = onCalMatch[1].trim().replace(/#.*$/, '').trim();
+          const cron = onCalendarToCron(cal);
+          const name = (currentUnit || ('timer-' + unitFileIndex)).replace(/\.timer$/i, '');
+          if (cron && !seen[name]) {
+            seen[name] = true;
+            results.push({ name: name, cron: cron });
+            if (!currentUnit) unitFileIndex++;
+          }
+          if (!cron) skipped++;
+          currentUnit = null;
+        }
+      }
+
+      const listTimersHeader = lines.findIndex(function (l) { return /NEXT\s+.+UNIT/i.test(l) && l.indexOf('UNIT') >= 0; });
+      if (listTimersHeader >= 0) {
+        for (let i = listTimersHeader + 1; i < lines.length; i++) {
+          const line = lines[i];
+          const timerMatch = line.match(/(\S+\.timer)/);
+          if (!timerMatch) continue;
+          const unitName = timerMatch[1].replace('.timer', '');
+          const cron = KNOWN_TIMERS[unitName];
+          if (cron && !seen[unitName]) {
+            seen[unitName] = true;
+            results.push({ name: unitName, cron: cron });
+          } else if (!seen[unitName]) {
+            seen[unitName] = true;
+            skipped++;
+          }
+        }
+      }
+
+      return { lines: results, skipped: skipped };
+    }
+
+    const systemdImportModal = document.getElementById('systemd-import-modal');
+    const systemdImportTextarea = document.getElementById('systemd-import-textarea');
+    const systemdImportBtn = document.getElementById('systemd-import-btn');
+    const systemdImportCancel = document.getElementById('systemd-import-cancel');
+    const btnImportSystemd = document.getElementById('btn-import-systemd');
+    if (btnImportSystemd && systemdImportModal) {
+      btnImportSystemd.addEventListener('click', function () {
+        if (systemdImportTextarea) systemdImportTextarea.value = '';
+        systemdImportModal.hidden = false;
+        systemdImportModal.setAttribute('aria-hidden', 'false');
+        systemdImportTextarea?.focus();
+      });
+    }
+    const systemdImportSample = document.getElementById('systemd-import-sample');
+    const systemdImportClear = document.getElementById('systemd-import-clear');
+    const SYSTEMD_SAMPLE_INPUT = 'NEXT                        LEFT     LAST                        PASSED   UNIT                         ACTIVATES\nSun 2026-03-09 17:00:00 UTC 2h left  Sun 2026-03-09 14:00:00 UTC 1h ago   logrotate.timer              logrotate.service\nSun 2026-03-09 18:30:00 UTC 3h left  Sun 2026-03-09 06:30:00 UTC 9h ago   apt-daily.timer              apt-daily.service\nMon 2026-03-10 00:00:00 UTC 9h left  Sat 2026-03-08 00:00:00 UTC 1 day ago backup.timer                backup.service';
+    if (systemdImportSample && systemdImportTextarea) {
+      systemdImportSample.addEventListener('click', function () {
+        systemdImportTextarea.value = SYSTEMD_SAMPLE_INPUT;
+      });
+    }
+    if (systemdImportClear && systemdImportTextarea) {
+      systemdImportClear.addEventListener('click', function () {
+        systemdImportTextarea.value = '';
+      });
+    }
+    if (systemdImportCancel && systemdImportModal) {
+      systemdImportCancel.addEventListener('click', function () {
+        systemdImportModal.hidden = true;
+        systemdImportModal.setAttribute('aria-hidden', 'true');
+      });
+    }
+    if (systemdImportBtn && systemdImportModal && systemdImportTextarea && input) {
+      systemdImportBtn.addEventListener('click', function () {
+        const raw = systemdImportTextarea.value.trim();
+        if (!raw) {
+          systemdImportModal.hidden = true;
+          systemdImportModal.setAttribute('aria-hidden', 'true');
+          return;
+        }
+        const parsed = parseSystemdTimersToCron(raw);
+        const linesToAdd = parsed.lines.map(function (r) { return '# imported from systemd\n' + r.name + ' ' + r.cron; });
+        if (linesToAdd.length > 0) {
+          const sep = input.value.trim() ? '\n' : '';
+          input.value = input.value.trim() + sep + linesToAdd.join('\n');
+        }
+        const toast = document.getElementById('share-toast');
+        if (toast) {
+          if (parsed.lines.length === 0) {
+            toast.textContent = 'No timers recognised — try pasting unit file contents instead';
+          } else {
+            toast.textContent = parsed.skipped > 0
+              ? parsed.lines.length + ' timers imported, ' + parsed.skipped + ' skipped (unknown schedule)'
+              : parsed.lines.length + ' timers imported';
+          }
+          toast.hidden = false;
+          if (window._shareToastTimeout) clearTimeout(window._shareToastTimeout);
+          window._shareToastTimeout = setTimeout(function () {
+            toast.hidden = true;
+            window._shareToastTimeout = null;
+          }, 2000);
+        }
+        systemdImportModal.hidden = true;
+        systemdImportModal.setAttribute('aria-hidden', 'true');
+      });
+    }
+    systemdImportModal && systemdImportModal.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        systemdImportModal.hidden = true;
+        systemdImportModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+
+    const crontabModal = document.getElementById('crontab-modal');
+    const btnCrontabHelp = document.getElementById('btn-crontab-help');
+    const btnModalClose = document.getElementById('btn-modal-close');
+    if (btnCrontabHelp && crontabModal) {
+      btnCrontabHelp.addEventListener('click', function () {
+        crontabModal.hidden = false;
+        crontabModal.setAttribute('aria-hidden', 'false');
+        btnModalClose?.focus();
+      });
+    }
+    if (btnModalClose && crontabModal) {
+      btnModalClose.addEventListener('click', function () {
+        crontabModal.hidden = true;
+        crontabModal.setAttribute('aria-hidden', 'true');
+      });
+      crontabModal.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          crontabModal.hidden = true;
+          crontabModal.setAttribute('aria-hidden', 'true');
+        }
+      });
+    }
+
+    const feedbackBtn = document.getElementById('feedback-btn');
+    const feedbackModal = document.getElementById('feedback-modal');
+    const feedbackModalPanel = document.getElementById('feedback-modal-panel');
+    const feedbackModalClose = document.getElementById('feedback-modal-close');
+    function closeFeedbackModal() {
+      if (feedbackModal) {
+        feedbackModal.classList.remove('visible');
+        feedbackModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (feedbackBtn && feedbackModal) {
+      feedbackBtn.addEventListener('click', function () {
+        feedbackModal.classList.add('visible');
+        feedbackModal.setAttribute('aria-hidden', 'false');
+        feedbackModalClose?.focus();
+      });
+    }
+    if (feedbackModalClose && feedbackModal) {
+      feedbackModalClose.addEventListener('click', closeFeedbackModal);
+    }
+    if (feedbackModal && feedbackModalPanel) {
+      feedbackModal.addEventListener('click', function (e) {
+        if (e.target === feedbackModal) closeFeedbackModal();
+      });
+      feedbackModal.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeFeedbackModal();
+      });
+    }
+
+    function initFromUrl() {
+      const STALE_KEYS = [
+        'cc-docker-compose',
+        'cc-docker-env',
+        'cc-firewall-ufw',
+        'cc-proxy-config',
+        'cc-ssl-domains'
+      ];
+      try {
+        STALE_KEYS.forEach(k => localStorage.removeItem(k));
+      } catch(_) {}
+
+      const params = new URLSearchParams(location.search);
+      const inputEl = document.getElementById('cron-input');
+      if (!inputEl) return;
+      if (SHARED_CRONTAB) {
+        inputEl.value = SHARED_CRONTAB;
+        const tabBuild = document.getElementById('tab-build');
+        const tabPaste = document.getElementById('tab-paste');
+        const panelPaste = document.getElementById('panel-paste');
+        const panelBuild = document.getElementById('panel-build');
+        const timelineActionsLeftEl = document.getElementById('timeline-actions-left');
+        if (tabBuild && tabPaste && panelPaste && panelBuild) {
+          tabBuild.classList.remove('active');
+          tabBuild.setAttribute('aria-selected', 'false');
+          tabPaste.classList.add('active');
+          tabPaste.setAttribute('aria-selected', 'true');
+          panelBuild.hidden = true;
+          panelPaste.hidden = false;
+          if (timelineActionsLeftEl) timelineActionsLeftEl.style.display = '';
+        }
+        userOverrodeTimeline = true;
+        setTimeout(function () {
+          runVisualization();
+          hasVisualised = true;
+          updateControlsVisibility();
+        }, 100);
+        return;
+      }
+      if (!params.get('jobs')) {
+        try {
+          const saved = localStorage.getItem(CC_CRON_PASTE);
+          if (saved != null && inputEl.value.trim() === '') {
+            inputEl.value = saved;
+            const noticeEl = document.getElementById('cc-restore-notice');
+            if (noticeEl) {
+              noticeEl.textContent = 'Last session restored';
+              noticeEl.style.display = 'block';
+              if (window._ccRestoreNoticeTimer) clearTimeout(window._ccRestoreNoticeTimer);
+              window._ccRestoreNoticeTimer = setTimeout(function () {
+                noticeEl.style.display = 'none';
+                window._ccRestoreNoticeTimer = null;
+              }, 3000);
+            }
+          }
+        } catch (_) {}
+      }
+      const jobsParam = params.get('jobs');
+      if (!jobsParam) return;
+      try {
+        const decoded = decodeURIComponent(escape(atob(jobsParam)));
+        if (decoded.startsWith('{')) {
+          const payload = JSON.parse(decoded);
+          if (payload.text != null) {
+            inputEl.value = payload.text;
+            runVisualization(payload.d && typeof payload.d === 'object' ? payload.d : undefined);
+            return;
+          }
+        }
+        inputEl.value = decoded;
+        runVisualization();
+      } catch (_) {
+        // Ignore malformed or invalid ?jobs= parameter
+      }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initFromUrl);
+    } else {
+      initFromUrl();
+    }
+  </script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    .seo-ai-content {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1117;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+    }
+
+    .header {
+      position: relative;
+      padding: 1.5rem 1.5rem 1rem;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .header .subtitle {
+      margin: 0.5rem 0 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.95rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .main {
+      display: flex;
+      flex-direction: row;
+      flex: 1 0 auto;
+    }
+
+    .tool-switcher {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      background: #10131f;
+      border-bottom: 1px solid #1e2236;
+      justify-content: center;
+    }
+    .tool-card {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #1e2236;
+      text-decoration: none;
+      color: #8a8fb5;
+      transition: all 0.15s;
+      min-width: 160px;
+    }
+    .tool-card:hover {
+      border-color: #6c63ff;
+      color: #e2e4f0;
+      background: #161924;
+    }
+    .tool-card.active {
+      border-color: #6c63ff;
+      background: #2a2650;
+      color: #fff;
+    }
+    .tool-icon { font-size: 1.25rem; }
+    .tool-name {
+      display: block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: inherit;
+    }
+    .tool-desc {
+      display: block;
+      font-size: 0.72rem;
+      color: #8a8fb5;
+      margin-top: 0.1rem;
+    }
+    .tool-card.active .tool-desc { color: #8b85ff; }
+    @media (max-width: 600px) {
+      .tool-switcher { gap: 0.4rem; padding: 0.5rem; }
+      .tool-card { min-width: unset; padding: 0.5rem 0.65rem; }
+      .tool-desc { display: none; }
+    }
+
+    @media (max-width: 768px) {
+      .main {
+        flex-direction: column;
+      }
+    }
+
+    .panel-left {
+      width: 40%;
+      padding: 1rem 1.25rem;
+      background: #1e2130;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      overflow-y: auto;
+      max-height: 100vh;
+    }
+
+    @media (max-width: 768px) {
+      .panel-left {
+        width: 100%;
+        max-height: none;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+    }
+
+    .tab-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .tab-bar {
+      display: flex;
+      border-bottom: 2px solid #1e2236;
+      margin-bottom: 1rem;
+    }
+    .tab-btn {
+      padding: 0.6rem 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      color: #8a8fb5;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      cursor: pointer;
+      white-space: nowrap;
+      text-decoration: none;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn.active {
+      color: #fff;
+      border-bottom: 2px solid #6c63ff;
+    }
+    .tab-btn:hover:not(.active) {
+      color: #e2e4f0;
+    }
+    .tab-panel {
+      display: block;
+    }
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .build-job-row {
+      position: relative;
+      margin-bottom: 1.25rem;
+      padding: 1rem;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .build-job-name-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .build-job-name-row label {
+      margin: 0;
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.8);
+      flex-shrink: 0;
+    }
+    .build-job-name-row input {
+      flex: 1;
+      min-width: 0;
+      max-width: calc(100% - 4rem);
+      padding: 0.5rem 0.75rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.875rem;
+    }
+    .build-delete-job-btn {
+      width: 1.75rem;
+      height: 1.75rem;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      font-size: 0.75rem;
+      line-height: 1;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+    }
+    .build-delete-job-btn:hover {
+      border-color: #f43f5e;
+      color: #f43f5e;
+    }
+    .build-fields-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+      margin-bottom: 0.75rem;
+    }
+    @media (max-width: 700px) {
+      .build-fields-row { grid-template-columns: 1fr; }
+    }
+    .build-field-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .build-field-wrap label {
+      display: block;
+      font-size: 0.7rem;
+      color: rgba(255, 255, 255, 0.6);
+      margin-bottom: 0.2rem;
+      text-align: center;
+    }
+    .build-field-wrap select,
+    .build-field-wrap input.build-custom {
+      width: 100%;
+      margin-top: 0.25rem;
+      padding: 0.4rem 0.5rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.75rem;
+    }
+    .build-job-row optgroup {
+      color: #8a8fb5;
+      font-size: 0.75rem;
+    }
+    .build-custom-hint {
+      font-size: 0.7rem;
+      color: #8a8fb5;
+      margin-top: 0.2rem;
+      display: block;
+    }
+    .build-expr-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .build-expr-box {
+      flex: 1;
+      min-width: 0;
+      border: 2px solid #6c63ff;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      background: #0b0d14;
+      text-align: center;
+    }
+    .build-expr-row .build-copy-expr-btn {
+      flex-shrink: 0;
+      margin: 0;
+    }
+    .build-expr-preview {
+      font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+      font-size: 1.5rem;
+      color: rgba(255, 255, 255, 0.95);
+      margin: 0;
+      word-break: break-all;
+    }
+    .build-expr-box .build-expr-preview {
+      text-align: center;
+    }
+    .build-expr-preview .expr-highlight {
+      color: #6c63ff;
+    }
+    .build-expr-invalid {
+      color: #f97316;
+      font-size: 0.875rem;
+    }
+    .build-next-run {
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.6);
+      margin-top: 0.35rem;
+    }
+    .build-add-job-btn {
+      margin-top: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8125rem;
+      background: transparent;
+      border: 1px dashed rgba(255, 255, 255, 0.3);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+    }
+    .build-add-job-btn:hover {
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .build-copy-expr-btn {
+      margin: 0;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.7rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .build-copy-expr-btn:hover {
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .build-next-runs {
+      margin-top: 0.5rem;
+      font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+      font-size: 0.75rem;
+      color: #8a8fb5;
+      line-height: 1.5;
+    }
+    .build-next-runs-header {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .build-next-runs-summary {
+      font-weight: 500;
+    }
+    .build-next-runs-toggle {
+      padding: 0.15rem 0.4rem;
+      font-size: 0.65rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      color: #8a8fb5;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .build-next-runs-toggle:hover {
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .build-next-runs-expanded {
+      margin-top: 0.35rem;
+      padding-left: 0.25rem;
+    }
+    .build-next-runs-line {
+      margin-top: 0.15rem;
+    }
+    .build-next-runs-label {
+      font-weight: normal;
+    }
+    .build-next-runs-empty {
+      font-style: italic;
+    }
+    .build-copy-all-crontab-btn {
+      display: block;
+      margin-top: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8125rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+    }
+    .build-copy-all-crontab-btn:hover {
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .build-visualize-wrap {
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-end;
+    }
+    .build-visualize-wrap .build-timeline-label {
+      min-width: 140px;
+    }
+
+    .panel-right {
+      width: 60%;
+      padding: 1rem 1.25rem;
+      background: #0f1117;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      align-self: flex-start;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 768px) {
+      .panel-right {
+        width: 100%;
+        position: static;
+        max-height: none;
+      }
+    }
+
+    .textarea-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .textarea-wrap label {
+      font-size: 0.875rem;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .cron-input-ignored-note {
+      font-size: 0.8125rem;
+      color: #6b7280;
+      margin: 0.25rem 0 0;
+    }
+
+    .quick-examples {
+      margin-top: 0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .quick-examples summary {
+      padding: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.75);
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .quick-examples summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .quick-examples summary::before {
+      content: '▶ ';
+      font-size: 0.6em;
+      opacity: 0.7;
+    }
+
+    .quick-examples[open] summary::before {
+      content: '▼ ';
+    }
+
+    .quick-examples-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      padding: 0.5rem 0.75rem 0.75rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .quick-example-btn {
+      padding: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .quick-example-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(108, 99, 255, 0.4);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      padding: 0.875rem 1rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #fff;
+      font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+      font-size: 0.875rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+
+    textarea::placeholder {
+      color: rgba(255, 255, 255, 0.35);
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #6c63ff;
+      box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.25);
+    }
+
+    .btn-visualize {
+      height: 2.25rem;
+      min-width: 100px;
+      padding: 0 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      vertical-align: middle;
+      flex-shrink: 0;
+      background: #6c63ff;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .btn-visualize:hover {
+      background: #5a52e0;
+    }
+
+    .btn-visualize:active {
+      transform: scale(0.98);
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      align-self: flex-start;
+      margin-top: 8px;
+    }
+
+    .btn-sample {
+      padding: 0.625rem 1.25rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.9375rem;
+      cursor: pointer;
+    }
+
+    .btn-sample:hover {
+      border-color: #6c63ff;
+      color: #fff;
+    }
+
+    .btn-sample:active {
+      transform: scale(0.98);
+    }
+
+    .parse-errors {
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 8px;
+    }
+
+    .parse-errors.has-errors {
+      color: #f87171;
+    }
+
+    .parse-errors .error-line {
+      margin-bottom: 0.25rem;
+    }
+
+    .parse-errors .error-line:last-child {
+      margin-bottom: 0;
+    }
+
+    .timeline-placeholder,
+    .timeline-empty {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 1rem;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .timeline-empty {
+      display: none;
+    }
+
+    .timeline-empty.visible {
+      display: block;
+    }
+
+    .timeline-wrapper {
+      display: none;
+      flex-direction: column;
+      flex: 0 0 auto;
+    }
+
+    .timeline-wrapper.visible {
+      display: flex;
+      flex-direction: column;
+      flex: 0 0 auto;
+      gap: 6px;
+    }
+
+    .timeline-svg-container {
+      flex: 0 0 auto;
+      min-height: 180px;
+      overflow: visible;
+    }
+
+    .timeline-svg-container svg {
+      display: block;
+    }
+
+    .timeline-tooltip {
+      display: none;
+      position: fixed;
+      padding: 0.5rem 0.75rem;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      font-size: 0.8125rem;
+      color: #fff;
+      pointer-events: none;
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      white-space: nowrap;
+    }
+
+    .controls-row {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .controls-row .control-group-overlap {
+      margin-right: 0.5rem;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 0.6875rem;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .control-group span { font-size: 0.6875rem; }
+
+    .control-select,
+    .control-input {
+      padding: 0.25rem 0.4rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 0.75rem;
+      min-width: 0;
+    }
+
+    .control-input { width: 3.5rem; }
+
+    .tz-note {
+      font-size: 0.625rem;
+      color: rgba(255, 255, 255, 0.45);
+      margin: 4px 0 0;
+      line-height: 1.3;
+      flex-basis: 100%;
+    }
+
+    .parsed-jobs-list-wrap {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .parsed-job-item {
+      margin-bottom: 1rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .parsed-job-item:last-child { border-bottom: none; }
+
+    .parsed-job-name {
+      font-weight: 600;
+      font-size: 0.9375rem;
+      color: #fff;
+    }
+
+    .parsed-job-cronstrue {
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.6);
+      margin-top: 0.25rem;
+    }
+
+    .parsed-job-duration-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .parsed-job-duration {
+      width: 4rem;
+      padding: 0.25rem 0.5rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 0.8125rem;
+    }
+
+    .parsed-job-weight-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .parsed-job-weight {
+      padding: 0.25rem 0.5rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 0.8125rem;
+    }
+
+    .single-job-prompt {
+      display: none;
+      font-size: 0.875rem;
+      color: rgba(255, 255, 255, 0.5);
+      text-align: center;
+      padding: 0.75rem 1rem;
+      margin-top: 0.5rem;
+    }
+
+    .single-job-prompt.visible {
+      display: block;
+    }
+
+    .server-load-banner {
+      display: none;
+      background: rgba(244, 63, 94, 0.2);
+      border: 1px solid #f43f5e;
+      color: #f43f5e;
+      padding: 0.3rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      margin-top: 6px;
+    }
+
+    .server-load-banner.visible {
+      display: block;
+    }
+
+    .timeline-legend {
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 6px;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .timeline-legend-item {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .overlap-report {
+      margin-top: 8px;
+      padding: 0.6rem 0.75rem;
+      background: #1e2130;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-left-width: 3px;
+      border-left-color: #f43f5e;
+    }
+
+    .overlap-report.has-ok {
+      border-left-color: #10b981;
+      background: rgba(16, 185, 129, 0.06);
+    }
+
+    .overlap-report-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 0.5rem;
+    }
+
+    .overlap-report-ok {
+      color: #10b981;
+      font-size: 0.9375rem;
+    }
+
+    .overlap-report-line {
+      font-size: 0.8125rem;
+      color: #f43f5e;
+      margin-bottom: 0.25rem;
+    }
+
+    .overlap-report-line:last-child {
+      margin-bottom: 0;
+    }
+    .overlap-report-flock-section {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .overlap-report-flock-job {
+      margin-bottom: 0.5rem;
+    }
+    .overlap-report-flock-job:last-child {
+      margin-bottom: 0;
+    }
+    .overlap-report-flock-job-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .overlap-report-flock-job-name {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+    }
+    .overlap-report-flock-label {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.7);
+      cursor: pointer;
+    }
+    .overlap-report-flock-code {
+      margin: 0.35rem 0 0 0;
+      padding: 0.5rem 0.6rem;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      font-size: 0.8125rem;
+      font-family: ui-monospace, monospace;
+      color: #e2e8f0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      user-select: all;
+    }
+    .overlap-report-flock-code code {
+      font-family: inherit;
+    }
+
+    .timeline-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: nowrap;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      min-height: 56px;
+    }
+    .timeline-actions-left {
+      flex-shrink: 0;
+    }
+    .timeline-actions-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .btn-share-timeline,
+    .btn-export-png,
+    .btn-copy-report {
+      padding: 0.5rem 0.75rem;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+
+    .btn-share-timeline:hover,
+    .btn-export-png:hover,
+    .btn-copy-report:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .btn-share-timeline:disabled,
+    .btn-export-png:disabled,
+    .btn-copy-report:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    @media (max-width: 600px) {
+      .timeline-actions {
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        padding: 0.5rem;
+        min-height: unset;
+      }
+      .btn-share-timeline,
+      .btn-export-png,
+      .btn-copy-report {
+        padding: 0.4rem 0.6rem;
+        font-size: 0.75rem;
+      }
+      #timeline-actions-left select {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.4rem;
+      }
+    }
+
+    .how-it-works {
+      padding: 2rem 1.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .how-it-works-heading {
+      margin: 0 0 1.5rem;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
+    }
+
+    .how-it-works-steps {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: center;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .how-it-works-card {
+      flex: 1 1 260px;
+      min-width: 0;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+
+    .how-it-works-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      border-radius: 50%;
+      background: #6c63ff;
+      color: #fff;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .how-it-works-title {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
+    .how-it-works-text {
+      margin: 0;
+      font-size: 0.875rem;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .how-it-works-text code {
+      font-family: inherit;
+      font-size: 0.8125em;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+
+    @media (max-width: 768px) {
+      .how-it-works-steps {
+        flex-direction: column;
+      }
+      .how-it-works-card {
+        flex: 1 1 auto;
+      }
+    }
+
+    .faq {
+      padding: 2rem 1.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .faq-heading {
+      margin: 0 0 1.5rem;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
+    }
+
+    .faq-list {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .faq-item {
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      overflow: hidden;
+    }
+
+    .faq-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .faq-question {
+      padding: 1rem 1.25rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .faq-question::-webkit-details-marker {
+      display: none;
+    }
+
+    .faq-question::before {
+      content: "+ ";
+      color: #6c63ff;
+    }
+
+    .faq-item[open] .faq-question::before {
+      content: "− ";
+    }
+
+    .faq-answer {
+      margin: 0;
+      padding: 0 1.25rem 1rem 1.25rem;
+      font-size: 0.875rem;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .site-footer {
+      text-align: center;
+      padding: 1.5rem;
+      border-top: 1px solid #1e2236;
+      margin-top: 2rem;
+    }
+    .privacy-note {
+      color: #8a8fb5;
+      font-size: 0.8125rem;
+      margin-bottom: 0.5rem;
+    }
+    .disclaimer-note {
+      color: #5a5f7a;
+      font-size: 0.75rem;
+      max-width: 680px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    .link-button {
+      background: none;
+      border: none;
+      color: #6c63ff;
+      cursor: pointer;
+      font-size: inherit;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    .link-button:hover {
+      color: #8b83ff;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 1rem;
+    }
+
+    .modal-overlay[aria-hidden="true"][hidden] {
+      display: none;
+    }
+
+    .modal-content {
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 1.5rem;
+      max-width: 420px;
+      max-height: 90vh;
+      overflow: auto;
+    }
+
+    .modal-content h2 {
+      margin: 0 0 1rem;
+      font-size: 1.25rem;
+    }
+
+    .modal-content p {
+      margin: 0 0 0.75rem;
+      font-size: 0.9375rem;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .modal-pre {
+      background: #0f1117;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.8125rem;
+      overflow-x: auto;
+      margin: 0.5rem 0 1rem;
+    }
+
+    .modal-list {
+      margin: 0.5rem 0 1rem;
+      padding-left: 1.25rem;
+    }
+
+    .modal-list li {
+      margin-bottom: 0.35rem;
+    }
+
+    .modal-content code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.875em;
+    }
+
+    .modal-disclaimer {
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.55);
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-modal-close {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.9375rem;
+      cursor: pointer;
+    }
+
+    .btn-modal-close:hover {
+      background: #5a52e0;
+    }
+
+    .modal-label {
+      display: block;
+      margin: 0 0 0.5rem;
+      font-size: 0.9375rem;
+      color: rgba(255, 255, 255, 0.85);
+    }
+    .modal-textarea {
+      width: 100%;
+      min-height: 120px;
+      padding: 0.75rem 1rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.8125rem;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      resize: vertical;
+      box-sizing: border-box;
+      margin-bottom: 1rem;
+    }
+    .modal-textarea::placeholder {
+      color: rgba(255, 255, 255, 0.4);
+    }
+    #systemd-import-modal .modal-content {
+      max-width: 560px;
+    }
+    #systemd-import-modal .modal-textarea {
+      min-height: 240px;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .btn-modal-primary {
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.9375rem;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+    }
+    .btn-modal-primary:hover {
+      background: #5a52e0;
+    }
+    .btn-modal-secondary {
+      padding: 0.5rem 1rem;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.9375rem;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+    }
+    .btn-modal-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .share-toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 201;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      color: #fff;
+      background: rgba(15, 17, 23, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      transition: opacity 0.2s ease;
+    }
+
+    .feedback-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 200;
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .feedback-btn:hover {
+      background: #5a52e0;
+    }
+
+    .feedback-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 201;
+      padding: 1rem;
+    }
+
+    .feedback-modal-overlay.visible {
+      display: flex;
+    }
+
+    .feedback-modal-panel {
+      position: relative;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .feedback-modal-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    .feedback-modal-close:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .feedback-modal-panel iframe {
+      display: block;
+      width: 480px;
+      height: 400px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <section class="seo-ai-content" aria-hidden="true">
+    ConfigClarity is a free web tool that helps developers and system administrators visualize cron job overlaps before they cause server load spikes or failures. Paste your crontab (or a list of cron expressions and optional job names) and instantly see a 24-hour timeline showing when each job runs, where multiple jobs overlap, and Server Load Warnings when three or more jobs fire in the same minute. It supports standard crontab format (minute hour day month weekday command) and an alternate format (job name plus cron expression). All processing runs in your browser; nothing is sent to a server. ConfigClarity is for anyone who manages cron jobs and wants to avoid scheduling conflicts, plan capacity, or explain schedules to their team. Tools like this help answer questions such as "what tools help visualize cron jobs" and "how do I see when my cron jobs overlap."
+  </section>
+  <header class="header">
+    <h1>Cron Job Overlap Checker & Visualiser</h1>
+    <p class="subtitle">Audit your cron schedules, SSL certificates, and Docker configs — before they cause downtime.</p>
+  </header>
+  <div class="tool-switcher">
+    <a href="/crontab" class="tool-card active">
+      <span class="tool-icon">🕐</span>
+      <span class="tool-info">
+        <span class="tool-name">Cron Builder & Visualiser</span>
+        <span class="tool-desc">Visualise job overlaps</span>
+      </span>
+    </a>
+    <a href="/ssl" class="tool-card">
+      <span class="tool-icon">🔒</span>
+      <span class="tool-info">
+        <span class="tool-name">SSL Checker</span>
+        <span class="tool-desc">Check cert expiry</span>
+      </span>
+    </a>
+    <a href="/docker" class="tool-card">
+      <span class="tool-icon">🐳</span>
+      <span class="tool-info">
+        <span class="tool-name">Docker Auditor</span>
+        <span class="tool-desc">Audit compose files</span>
+      </span>
+    </a>
+    <a href="/firewall" class="tool-card">
+      <span class="tool-icon">🛡️</span>
+      <span class="tool-info">
+        <span class="tool-name">Firewall Auditor</span>
+        <span class="tool-desc">Audit UFW rules</span>
+      </span>
+    </a>
+    <a href="/proxy" class="tool-card">
+      <span class="tool-icon">🔀</span>
+      <span class="tool-info">
+        <span class="tool-name">Reverse Proxy Mapper</span>
+        <span class="tool-desc">Map routing & audit</span>
+      </span>
+    </a>
+  </div>
+
+  <main class="main">
+    <aside class="panel-left">
+      <div class="tab-row">
+        <nav class="tab-bar" role="tablist" aria-label="Input mode">
+          <a href="#" role="tab" id="tab-build" class="tab-link tab-btn active" aria-selected="true">Build New Job</a>
+          <a href="#" role="tab" id="tab-paste" class="tab-link tab-btn" aria-selected="false">Paste Existing Crontab</a>
+        </nav>
+      </div>
+      <div id="panel-paste" class="tab-panel" role="tabpanel" hidden>
+        <div class="textarea-wrap">
+          <label for="cron-input">Cron jobs (one per line)</label>
+          <textarea id="cron-input" placeholder="# Format 1: job_name cron_expression&#10;# Format 2: standard crontab (expression command)&#10;backup */15 * * * *&#10;*/15 * * * * /usr/bin/backup.sh" aria-label="Paste cron jobs: job name and expression, or standard crontab (minute hour day month weekday command)"></textarea>
+        <p class="cc-restore-notice" id="cc-restore-notice" aria-live="polite" style="display: none; color: #8a8fb5; font-size: 0.75rem; margin: 0.25rem 0 0;"></p>
+        <p class="cron-input-ignored-note" id="cron-ignored-note" aria-live="polite" style="display: none;"></p>
+        <details class="quick-examples">
+          <summary>Quick Examples</summary>
+          <div class="quick-examples-list">
+            <button type="button" class="quick-example-btn" data-line="every-5min */5 * * * *">Every 5 minutes</button>
+            <button type="button" class="quick-example-btn" data-line="hourly 0 * * * *">Every hour</button>
+            <button type="button" class="quick-example-btn" data-line="daily-2am 0 2 * * *">Daily at 2am</button>
+            <button type="button" class="quick-example-btn" data-line="sunday-midnight 0 0 * * 0">Every Sunday at midnight</button>
+            <button type="button" class="quick-example-btn" data-line="first-of-month 0 0 1 * *">First day of every month</button>
+            <button type="button" class="quick-example-btn" data-line="weekday-9am 0 9 * * 1-5">Every weekday at 9am</button>
+            <button type="button" class="quick-example-btn" data-line="business-hours-15min */15 9-17 * * 1-5">Every 15 minutes during business hours</button>
+            <button type="button" class="quick-example-btn" data-line="twice-daily 0 6,18 * * *">Twice daily</button>
+          </div>
+        </details>
+        <div class="controls-row">
+          <label class="control-group control-group-overlap">
+            <span>Overlap threshold</span>
+            <select id="overlap-threshold" class="control-select">
+              <option value="1">1 min</option>
+              <option value="5" selected>5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+            </select>
+          </label>
+          <label class="control-group">
+            <span>Timezone</span>
+            <select id="timezone" class="control-select">
+              <option value="local" selected>Local</option>
+              <option value="utc">UTC</option>
+              <option value="custom">Custom offset</option>
+            </select>
+          </label>
+          <label class="control-group" id="timezone-offset-wrap" style="display:none">
+            <span>Offset (hours)</span>
+            <input type="number" id="timezone-offset" class="control-input" min="-12" max="14" step="0.5" value="0" />
+          </label>
+          <p class="tz-note">⚠️ Set this to match your SERVER's timezone. Most servers run UTC.</p>
+          <button type="button" class="btn-sample" id="btn-sample" aria-label="Load sample cron jobs">Sample input</button>
+          <button type="button" class="btn-sample" id="btn-import-systemd" aria-label="Import systemd timers">Import systemd timers</button>
+          <button type="button" class="btn-sample" id="btn-clear-paste" aria-label="Clear crontab and timeline">Clear</button>
+        </div>
+        <div id="parse-errors" class="parse-errors" aria-live="polite"></div>
+        <div id="parsed-jobs-list" class="parsed-jobs-list-wrap"></div>
+        </div>
+      </div>
+      <div id="panel-build" class="tab-panel" role="tabpanel">
+        <div class="build-jobs-container" id="build-jobs-container"></div>
+        <button type="button" class="build-add-job-btn" id="build-add-job-btn" aria-label="Add another job">+ Add Another Job</button>
+        <button type="button" class="build-copy-all-crontab-btn" id="build-copy-all-crontab-btn" aria-label="Copy all jobs as crontab">Copy all as crontab</button>
+      </div>
+    </aside>
+
+    <section class="panel-right">
+      <div class="timeline-actions" id="timeline-actions">
+        <button type="button" class="btn-visualize btn-visualize-tab" id="btn-visualize-tab" aria-label="Visualise cron jobs on timeline">Visualise</button>
+        <div class="timeline-actions-left" id="timeline-actions-left">
+          <select id="timeline-range" class="control-select" aria-label="Timeline window">
+            <option value="1440" selected>Next 24 hours</option>
+            <option value="4320">Next 3 days</option>
+            <option value="10080">Next 7 days</option>
+            <option value="43200">Next 30 days</option>
+          </select>
+        </div>
+        <button type="button" class="btn-share-timeline" id="btn-share-timeline" aria-label="Copy shareable crontab link to clipboard">🔗 Share Timeline URL</button>
+        <button type="button" class="btn-export-png" id="btn-export-png" aria-label="Export timeline as PNG">🖼️ Export PNG</button>
+        <button type="button" class="btn-copy-report" id="btn-copy-report" aria-label="Copy overlap report to clipboard">Copy Overlap Report</button>
+      </div>
+      <p class="timeline-placeholder" id="timeline-placeholder">Your timeline will appear here.</p>
+      <p class="timeline-empty" id="timeline-empty">No valid cron jobs yet — paste some above</p>
+      <div class="timeline-wrapper" id="timeline-wrapper" role="region" aria-label="Cron job timeline and overlap report">
+        <p id="timeline-auto-note" aria-live="polite" style="display:none; font-size:0.75rem; color:#8a8fb5; margin-top:0.25rem;"></p>
+        <div class="timeline-svg-container" id="timeline-svg-container" aria-label="Timeline chart of cron job runs"></div>
+        <p id="timeline-resolution-note" aria-live="polite" style="display:none; font-size:0.75rem; color:#8a8fb5; margin-top:0.5rem;"></p>
+        <p class="single-job-prompt" id="single-job-prompt">Add more jobs to see overlap detection — paste your full crontab -l output.</p>
+        <div class="server-load-banner" id="server-load-banner">⚠️ Server Load Warning</div>
+        <div class="server-load-banner" id="oom-warning-banner" aria-live="polite"></div>
+        <div class="timeline-legend" id="timeline-legend" aria-hidden="true">Job severity: <span class="timeline-legend-item">Low ─</span> <span class="timeline-legend-item">Medium ══</span> <span class="timeline-legend-item">High ═══</span></div>
+        <div class="overlap-report" id="overlap-report" role="region" aria-label="Overlap report" tabindex="0"></div>
+      </div>
+    </section>
+  </main>
+  <section class="how-it-works" aria-labelledby="how-it-works-heading">
+    <h2 id="how-it-works-heading" class="how-it-works-heading">How It Works</h2>
+    <div class="how-it-works-steps">
+      <div class="how-it-works-card">
+        <span class="how-it-works-num" aria-hidden="true">1</span>
+        <h3 class="how-it-works-title">Build or paste cron expressions</h3>
+        <p class="how-it-works-text">Use Build mode to create jobs with dropdowns and see plain English translations instantly. Or paste your existing <code>crontab -l</code> output directly — both feed the same visualizer.</p>
+      </div>
+      <div class="how-it-works-card">
+        <span class="how-it-works-num" aria-hidden="true">2</span>
+        <h3 class="how-it-works-title">Visualize overlaps on a timeline</h3>
+        <p class="how-it-works-text">Instantly generates a 24h, 7-day, or 30-day timeline showing every job execution window. Overlapping jobs are flagged with exact times and counts.</p>
+      </div>
+      <div class="how-it-works-card">
+        <span class="how-it-works-num" aria-hidden="true">3</span>
+        <h3 class="how-it-works-title">Fix issues before they hit prod</h3>
+        <p class="how-it-works-text">Review the Overlap Report, adjust job severity (Low/Medium/High), copy fixed expressions directly from the builder, and re-visualize until you're clean.</p>
+      </div>
+    </div>
+  </section>
+  <section class="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading" class="faq-heading">Frequently Asked Questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary class="faq-question">What is a cron job overlap?</summary>
+        <p class="faq-answer">A cron overlap occurs when a job is still running when its next scheduled instance starts, or when two different jobs fire at the same time. Cron silently spawns a second copy with no warning, which can exhaust server memory and CPU.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">How is this different from crontab.guru?</summary>
+        <p class="faq-answer">crontab.guru handles one expression at a time. ConfigClarity handles multiple jobs simultaneously, detects overlaps, visualizes execution windows on a timeline, and includes a visual builder — all in one privacy-first tool with no signup required.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Is my data stored anywhere?</summary>
+        <p class="faq-answer">No. We do not store your pasted configs, domains, or IP address. All processing happens entirely in your browser. Nothing you paste ever leaves your device.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is the best way to get my crontab?</summary>
+        <p class="faq-answer">Use Build mode to create jobs from scratch, or run <code>crontab -l</code> in your terminal and paste the full output. ConfigClarity handles environment variable lines and comments automatically.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Does it support @reboot?</summary>
+        <p class="faq-answer">Yes. @reboot jobs are detected and listed as "Runs on server start" but not shown on the timeline since they have no recurring schedule.</p>
+      </details>
+    </div>
+  </section>
+  <footer class="site-footer">
+    <p class="privacy-note">
+      🔒 We do not store your pasted configs, domains, or IP address.
+      All processing happens entirely in your browser.
+    </p>
+    <p class="disclaimer-note">
+      ConfigClarity is provided "as is" without warranty of any kind.
+      This tool is for informational and planning purposes only.
+      Always verify your cron schedules independently before deploying
+      to production. ConfigClarity accepts no liability for scheduling
+      errors, server downtime, data loss, or any damages arising from
+      use of this tool.
+    </p>
+  </footer>
+  <div class="timeline-tooltip" id="timeline-tooltip" aria-hidden="true"></div>
+  <div class="modal-overlay" id="systemd-import-modal" role="dialog" aria-modal="true" aria-labelledby="systemd-import-modal-title" aria-hidden="true" hidden>
+    <div class="modal-content">
+      <h2 id="systemd-import-modal-title">Import systemd timers</h2>
+      <label for="systemd-import-textarea" class="modal-label">Paste output of: systemctl list-timers --all<br>or unit file contents (systemctl cat mytimer.timer)</label>
+      <textarea id="systemd-import-textarea" class="modal-textarea" placeholder="Paste output of: systemctl list-timers --all&#10;or unit file contents (systemctl cat mytimer.timer)" aria-label="Systemd list-timers output or unit file contents" rows="8"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn-modal-primary" id="systemd-import-btn">Import</button>
+        <button type="button" class="btn-modal-secondary" id="systemd-import-sample">Sample input</button>
+        <button type="button" class="btn-modal-secondary" id="systemd-import-clear">Clear</button>
+        <button type="button" class="btn-modal-secondary" id="systemd-import-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="crontab-modal" role="dialog" aria-modal="true" aria-labelledby="crontab-modal-title" aria-hidden="true" hidden>
+    <div class="modal-content">
+      <h2 id="crontab-modal-title">How to read your crontab</h2>
+      <p>Cron uses a 5-field format (or 6 with seconds). Each field is:</p>
+      <pre class="modal-pre">minute  hour  day-of-month  month  day-of-week
+(0-59) (0-23)    (1-31)     (1-12)   (0-6, 0=Sun)</pre>
+      <p><strong>Examples:</strong></p>
+      <ul class="modal-list">
+        <li><code>0 2 * * *</code> — Every day at 02:00</li>
+        <li><code>*/15 * * * *</code> — Every 15 minutes</li>
+        <li><code>0 9 * * 1-5</code> — Weekdays at 09:00</li>
+        <li><code>0 0 1 * *</code> — First day of every month at midnight</li>
+      </ul>
+      <p>Run <code>crontab -l</code> in your terminal to see your current jobs. Paste them here in either format: <strong>job_name cron_expression</strong> or standard crontab <strong>minute hour day month weekday /path/to/command</strong>.</p>
+      <p class="modal-disclaimer">Cron syntax examples are for educational purposes only. Commands shown are illustrative and should not be run without understanding their effects on your system.</p>
+      <button type="button" class="btn-modal-close" id="btn-modal-close" aria-label="Close">Close</button>
+    </div>
+  </div>
+  <div id="share-toast" class="share-toast" aria-live="polite" hidden>Link copied to clipboard!</div>
+  <button type="button" class="feedback-btn" id="feedback-btn" aria-label="Send feedback">💬 Feedback</button>
+  <div class="feedback-modal-overlay" id="feedback-modal" role="dialog" aria-modal="true" aria-label="Feedback form" aria-hidden="true">
+    <div class="feedback-modal-panel" id="feedback-modal-panel">
+      <button type="button" class="feedback-modal-close" id="feedback-modal-close" aria-label="Close">×</button>
+      <iframe src="https://tally.so/embed/Y5Zx15" title="Feedback form" width="480" height="400"></iframe>
+    </div>
+  </div>
+</body>
+</html>

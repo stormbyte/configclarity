@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ConfigClarity – Free Sysadmin Tools</title>
+  <meta name="description" content="Free sysadmin tools: Cron Expression Builder, SSL & Domain Expiry Tracker, Docker Compose Auditor. No signup. No backend. Everything runs in your browser.">
+  <link rel="canonical" href="https://configclarity.dev">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1117;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      padding: 2rem 1.5rem 1.5rem;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 2rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .header .subtitle {
+      margin: 0.75rem 0 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 1.05rem;
+      max-width: 32rem;
+      margin-left: auto;
+      margin-right: auto;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .main {
+      flex: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+      width: 100%;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .card:hover {
+      border-color: #6c63ff;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+    .card-icon {
+      font-size: 2rem;
+      margin-bottom: 0.75rem;
+      line-height: 1;
+    }
+    .card-title {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: -0.01em;
+    }
+    .card-desc {
+      margin: 0.75rem 0 1rem;
+      font-size: 0.9375rem;
+      color: rgba(255, 255, 255, 0.8);
+      line-height: 1.5;
+      flex: 1;
+    }
+    .card-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 1rem;
+    }
+    .card-tag {
+      font-size: 0.7rem;
+      padding: 0.25rem 0.5rem;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      color: rgba(255, 255, 255, 0.7);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .card-cta {
+      display: inline-block;
+      padding: 0.6rem 1rem;
+      background: #6c63ff;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: background 0.15s ease;
+      text-align: center;
+    }
+    .card-cta:hover {
+      background: #5a52e0;
+    }
+    .footer {
+      padding: 1rem 1.5rem;
+      text-align: center;
+      font-size: 0.8125rem;
+      color: rgba(255, 255, 255, 0.45);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .footer p {
+      margin: 0.5rem 0;
+    }
+    .footer-disclaimer {
+      max-width: 56rem;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>ConfigClarity</h1>
+    <p class="subtitle">Free sysadmin tools. No signup. No backend. Everything runs in your browser.</p>
+  </header>
+
+  <main class="main">
+    <div class="cards">
+      <article class="card">
+        <span class="card-icon" aria-hidden="true">🕐</span>
+        <h2 class="card-title">Cron Expression Builder</h2>
+        <p class="card-desc">Build cron expressions visually or paste your crontab. See job overlaps on a 24h timeline before they crash your server.</p>
+        <div class="card-tags">
+          <span class="card-tag">cron</span>
+          <span class="card-tag">scheduler</span>
+          <span class="card-tag">overlap</span>
+        </div>
+        <a href="/" class="card-cta">Open Cron Builder →</a>
+      </article>
+      <article class="card">
+        <span class="card-icon" aria-hidden="true">🔒</span>
+        <h2 class="card-title">SSL & Domain Expiry Tracker</h2>
+        <p class="card-desc">Paste domains and see certificate expiry at a glance. Color-coded status, wildcard detection, CDN warnings included.</p>
+        <div class="card-tags">
+          <span class="card-tag">ssl</span>
+          <span class="card-tag">certificates</span>
+          <span class="card-tag">domains</span>
+        </div>
+        <a href="/ssl" class="card-cta">Open SSL Checker →</a>
+      </article>
+      <article class="card">
+        <span class="card-icon" aria-hidden="true">🐳</span>
+        <h2 class="card-title">Docker Compose Auditor</h2>
+        <p class="card-desc">Paste your docker-compose.yml and instantly audit healthchecks, hardcoded secrets, port collisions and env vars.</p>
+        <div class="card-tags">
+          <span class="card-tag">docker</span>
+          <span class="card-tag">compose</span>
+          <span class="card-tag">devops</span>
+        </div>
+        <a href="/docker" class="card-cta">Open Docker Auditor →</a>
+      </article>
+      <article class="card">
+        <span class="card-icon" aria-hidden="true">🛡️</span>
+        <h2 class="card-title">Firewall Auditor</h2>
+        <p class="card-desc">Paste your UFW status output and instantly audit high-risk ports, missing default-deny, conflicting rules and overly broad CIDR ranges.</p>
+        <div class="card-tags">
+          <span class="card-tag">ufw</span>
+          <span class="card-tag">firewall</span>
+          <span class="card-tag">security</span>
+        </div>
+        <a href="/firewall" class="card-cta">Open Firewall Auditor →</a>
+      </article>
+      <article class="card">
+        <span class="card-icon" aria-hidden="true">🔀</span>
+        <h2 class="card-title">Reverse Proxy Mapper</h2>
+        <p class="card-desc">Paste nginx.conf or docker-compose.yml with Traefik labels. Visualise routing decisions, detect dangling routers, missing SSL redirects and exposed admin routes.</p>
+        <div class="card-tags">
+          <span class="card-tag">nginx</span>
+          <span class="card-tag">traefik</span>
+          <span class="card-tag">routing</span>
+        </div>
+        <a href="/proxy" class="card-cta">Open Proxy Mapper →</a>
+      </article>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>All tools run in your browser. No data is stored or transmitted.</p>
+    <p class="footer-disclaimer">Provided as is without warranty. For informational purposes only. Always verify configurations independently before deploying to production. ConfigClarity accepts no liability for any damages arising from use of these tools.</p>
+    <p>© 2026 ConfigClarity. All rights reserved.</p>
+  </footer>
+</body>
+</html>

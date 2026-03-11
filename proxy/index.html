@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reverse Proxy Flow Mapper | ConfigClarity</title>
+  <meta name="description" content="Paste nginx.conf or docker-compose with Traefik labels. Visualise routing, test URL matching, and audit for dangling routers, missing SSL redirect, exposed admin routes.">
+  <meta name="keywords" content="nginx config checker, nginx audit tool, traefik config validator, reverse proxy checker, nginx ssl redirect checker, traefik dangling router, proxy_pass localhost, nginx location matcher">
+  <meta property="og:title" content="Reverse Proxy Flow Mapper — nginx & Traefik | ConfigClarity">
+  <meta property="og:description" content="Paste nginx.conf or docker-compose with Traefik labels. Visualise routing, test URL matching, and audit for dangling routers, missing SSL redirects and exposed admin routes.">
+  <meta property="og:url" content="https://configclarity.dev/proxy">
+  <meta property="og:type" content="website">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Reverse Proxy Flow Mapper",
+    "url": "https://configclarity.dev/proxy",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "description": "Paste nginx.conf or docker-compose with Traefik labels. Visualise routing flow, test URL matching, and audit for dangling routers, missing SSL redirects and exposed admin routes. Free, runs in your browser.",
+    "featureList": ["nginx config parsing", "Traefik label parsing", "URL match testing", "Dangling router detection", "SSL redirect audit", "Admin route exposure detection"],
+    "provider": { "@type": "Organization", "name": "ConfigClarity", "url": "https://configclarity.dev" }
+  }
+  </script>
+  <link rel="canonical" href="https://configclarity.dev/proxy">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+  <style>
+    :root {
+      --bg: #0b0d14;
+      --purple: #6c63ff;
+      --green: #22c55e;
+      --orange: #f97316;
+      --red: #ef4444;
+      --text: #e2e4f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1117;
+      color: var(--text);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      line-height: 1.5;
+    }
+    .header {
+      padding: 1.5rem 1.5rem 1rem;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .header .subtitle {
+      margin: 0.5rem 0 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.95rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .tool-switcher {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      background: #10131f;
+      border-bottom: 1px solid #1e2236;
+      justify-content: center;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .tool-card {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #1e2236;
+      text-decoration: none;
+      color: #8a8fb5;
+      transition: all 0.15s;
+      min-width: 140px;
+    }
+    .tool-card:hover {
+      border-color: var(--purple);
+      color: var(--text);
+      background: #161924;
+    }
+    .tool-card.active {
+      border-color: var(--purple);
+      background: #2a2650;
+      color: #fff;
+    }
+    .tool-icon { font-size: 1.25rem; }
+    .tool-name {
+      display: block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: inherit;
+    }
+    .tool-desc {
+      display: block;
+      font-size: 0.72rem;
+      color: #8a8fb5;
+      margin-top: 0.1rem;
+    }
+    .tool-card.active .tool-desc { color: #8b85ff; }
+    @media (max-width: 600px) {
+      .tool-switcher {
+        display: flex;
+        flex-direction: row;
+        overflow-x: auto;
+        gap: 0.4rem;
+        padding: 0.5rem;
+        justify-content: flex-start;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .tool-switcher::-webkit-scrollbar { display: none; }
+      .tool-card {
+        min-width: unset;
+        flex-shrink: 0;
+        padding: 0.5rem 0.65rem;
+      }
+      .tool-desc { display: none; }
+    }
+    .main {
+      display: flex;
+      flex-direction: row;
+      flex: 1 0 auto;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) { .main { flex-direction: column; } }
+    .panel-left {
+      width: 40%;
+      min-width: 280px;
+      padding: 1rem 1.25rem;
+      background: #1e2130;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) {
+      .panel-left { width: 100%; border-right: none; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+    }
+    .panel-right {
+      width: 60%;
+      padding: 1rem 1.25rem;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    @media (max-width: 900px) { .panel-right { width: 100%; } }
+    .textarea-wrap { display: flex; flex-direction: column; gap: 8px; margin-bottom: 1rem; }
+    .textarea-wrap label { font-size: 0.875rem; color: rgba(255, 255, 255, 0.8); }
+    .input-wrap { display: flex; flex-direction: column; gap: 6px; margin-bottom: 1rem; }
+    .input-wrap label { font-size: 0.875rem; color: rgba(255, 255, 255, 0.8); }
+    input[type="text"], input[type="url"] {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+    textarea {
+      width: 100%;
+      min-height: 260px;
+      padding: 0.875rem 1rem;
+      background: #0f1117;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #fff;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+    textarea::placeholder { color: rgba(255, 255, 255, 0.35); }
+    textarea:focus {
+      outline: none;
+      border-color: var(--purple);
+      box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.25);
+    }
+    .button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 8px; }
+    .btn-audit {
+      padding: 0.625rem 1.25rem;
+      background: var(--purple);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-audit:hover { background: #5a52e0; }
+    .btn-sample {
+      padding: 0.625rem 1rem;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-sample:hover { border-color: var(--purple); color: #fff; }
+    .share-toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 201;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      color: #fff;
+      background: rgba(15, 17, 23, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      transition: opacity 0.2s ease;
+    }
+    .placeholder-msg {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 1rem;
+      text-align: center;
+      padding: 2rem;
+    }
+    .flow-section, .audit-section {
+      margin-bottom: 1.5rem;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .section-title {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .section-body { padding: 1rem; }
+    .flow-diagram {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .flow-node {
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 0.8125rem;
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .flow-node.matched {
+      border-color: var(--green);
+      background: rgba(34, 197, 94, 0.15);
+      color: var(--text);
+    }
+    .flow-node.not-matched {
+      border-color: rgba(255, 255, 255, 0.06);
+      background: rgba(0, 0, 0, 0.2);
+      color: #8a8fb5;
+    }
+    .flow-node-title { font-weight: 600; margin-bottom: 0.2rem; }
+    .flow-node-detail { font-size: 0.75rem; color: #8a8fb5; }
+    .flow-node.not-matched .flow-node-detail { color: var(--orange); }
+    .flow-node.matched .flow-node-detail { color: var(--green); }
+    .flow-type-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      margin-left: 0.5rem;
+      background: rgba(108, 99, 255, 0.3);
+      color: #a5a0ff;
+    }
+    .finding-card {
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      border-radius: 8px;
+      border-left: 4px solid;
+      font-size: 0.875rem;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .finding-card:last-child { margin-bottom: 0; }
+    .finding-card.critical { border-left-color: var(--red); }
+    .finding-card.warning { border-left-color: var(--orange); }
+    .finding-card.info { border-left-color: var(--purple); }
+    .finding-card.ok { border-left-color: var(--green); }
+    .finding-title { font-weight: 600; margin-bottom: 0.25rem; }
+    .finding-card.critical .finding-title { color: var(--red); }
+    .finding-card.warning .finding-title { color: var(--orange); }
+    .finding-card.info .finding-title { color: var(--purple); }
+    .finding-card.ok .finding-title { color: var(--green); }
+    .finding-detail { color: #8a8fb5; font-size: 0.8125rem; }
+    .audit-ok-msg { color: var(--green); font-size: 0.875rem; padding: 0.5rem 0; }
+    .faq { padding: 2rem 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+    .faq-heading { margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; text-align: center; }
+    .faq-list { max-width: 640px; margin: 0 auto; }
+    .faq-item { background: #1e2130; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+    .faq-item:last-child { margin-bottom: 0; }
+    .faq-question { padding: 1rem 1.25rem; font-size: 0.9375rem; font-weight: 600; color: rgba(255, 255, 255, 0.95); cursor: pointer; list-style: none; }
+    .faq-question::-webkit-details-marker { display: none; }
+    .faq-question::before { content: "+ "; color: var(--purple); }
+    .faq-item[open] .faq-question::before { content: "− "; }
+    .faq-answer { margin: 0; padding: 0 1.25rem 1rem 1.25rem; font-size: 0.875rem; line-height: 1.55; color: rgba(255, 255, 255, 0.75); }
+    .site-footer {
+      text-align: center;
+      padding: 1.5rem;
+      border-top: 1px solid #1e2236;
+      margin-top: 2rem;
+    }
+    .privacy-note { color: #8a8fb5; font-size: 0.8125rem; margin-bottom: 0.5rem; }
+    .disclaimer-note {
+      color: #5a5f7a;
+      font-size: 0.75rem;
+      max-width: 680px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    .feedback-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 200;
+      padding: 0.5rem 1rem;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .feedback-btn:hover {
+      background: #5a52e0;
+    }
+
+    .feedback-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 201;
+      padding: 1rem;
+    }
+
+    .feedback-modal-overlay.visible {
+      display: flex;
+    }
+
+    .feedback-modal-panel {
+      position: relative;
+      background: #1e2130;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .feedback-modal-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    .feedback-modal-close:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .feedback-modal-panel iframe {
+      display: block;
+      width: 480px;
+      height: 400px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>Reverse Proxy Flow Mapper</h1>
+    <p class="subtitle">Paste nginx.conf or Traefik labels. See routing flow and audit findings.</p>
+  </header>
+  <div class="tool-switcher">
+    <a href="/" class="tool-card">
+      <span class="tool-icon">🕐</span>
+      <span class="tool-info">
+        <span class="tool-name">Cron Builder & Visualiser</span>
+        <span class="tool-desc">Visualize job overlaps</span>
+      </span>
+    </a>
+    <a href="/ssl" class="tool-card">
+      <span class="tool-icon">🔒</span>
+      <span class="tool-info">
+        <span class="tool-name">SSL Checker</span>
+        <span class="tool-desc">Check cert expiry</span>
+      </span>
+    </a>
+    <a href="/docker" class="tool-card">
+      <span class="tool-icon">🐳</span>
+      <span class="tool-info">
+        <span class="tool-name">Docker Auditor</span>
+        <span class="tool-desc">Audit compose files</span>
+      </span>
+    </a>
+    <a href="/firewall" class="tool-card">
+      <span class="tool-icon">🛡️</span>
+      <span class="tool-info">
+        <span class="tool-name">Firewall Auditor</span>
+        <span class="tool-desc">Audit UFW rules</span>
+      </span>
+    </a>
+    <a href="/proxy" class="tool-card active">
+      <span class="tool-icon">🔀</span>
+      <span class="tool-info">
+        <span class="tool-name">Reverse Proxy Mapper</span>
+        <span class="tool-desc">Map routing & audit</span>
+      </span>
+    </a>
+  </div>
+
+  <main class="main">
+    <aside class="panel-left">
+      <div class="textarea-wrap">
+        <label for="config-input">nginx.conf or docker-compose.yml (Traefik labels)</label>
+        <textarea id="config-input" placeholder="Paste config... (auto-detects nginx vs Traefik)" aria-label="Proxy config"></textarea>
+        <p class="cc-restore-notice" id="cc-restore-notice" aria-live="polite" style="display: none; color: #8a8fb5; font-size: 0.75rem; margin: 0.25rem 0 0;"></p>
+      </div>
+      <div class="input-wrap">
+        <label for="test-url">Test URL <span style="color:#8a8fb5;font-size:0.75rem">(optional)</span></label>
+        <input type="text" id="test-url" placeholder="https://example.com/admin" aria-label="URL to test which rule matches">
+      </div>
+      <div class="button-row">
+        <button type="button" class="btn-audit" id="btn-map" aria-label="Map routing and run audit">Map flow</button>
+        <button type="button" class="btn-sample" id="btn-sample-nginx" aria-label="Load sample nginx config">Sample nginx</button>
+        <button type="button" class="btn-sample" id="btn-sample-traefik" aria-label="Load sample Traefik compose">Sample Traefik</button>
+        <button type="button" class="btn-sample" id="btn-share-url" aria-label="Copy shareable URL with config">Share URL</button>
+        <button type="button" class="btn-sample" id="btn-clear" aria-label="Clear input and results">Clear</button>
+      </div>
+    </aside>
+
+    <section class="panel-right">
+      <p class="placeholder-msg" id="placeholder">Paste nginx.conf or docker-compose with Traefik labels, then click Map flow.</p>
+      <div id="results" style="display: none;">
+        <div class="flow-section">
+          <h2 class="section-title">Routing flow</h2>
+          <div class="section-body">
+            <div id="flow-diagram" class="flow-diagram"></div>
+          </div>
+        </div>
+        <div class="audit-section">
+          <h2 class="section-title">Audit findings</h2>
+          <div class="section-body" id="audit-findings"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section style="padding: 2rem 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); text-align: center;">
+    <h2 style="margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; color: #fff; font-family: 'JetBrains Mono', monospace;">How It Works</h2>
+    <div style="display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; max-width: 800px; margin: 0 auto;">
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">1. Paste</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Paste your nginx.conf or docker-compose.yml with Traefik labels. The tool auto-detects which format you're using.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">2. Map</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Click Map flow. Optionally enter a test URL to see which routing rule would match it.</p>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">3. Audit</div>
+        <p style="color: rgba(255,255,255,0.65); font-size: 0.875rem; margin: 0;">Review findings for dangling routers, missing SSL redirects, localhost proxy_pass and exposed admin routes. Nothing leaves your browser.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading" class="faq-heading">Frequently Asked Questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary class="faq-question">Does this support Caddy or Apache?</summary>
+        <p class="faq-answer">Currently this tool supports nginx.conf files and docker-compose.yml files with Traefik labels. Caddy and Apache support may be added in future.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is a dangling Traefik router?</summary>
+        <p class="faq-answer">A dangling router is a Traefik router label that references a service name that does not exist in your compose file. Traffic matching that router has nowhere to go and will result in a 404 or gateway error.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What does missing SSL redirect mean?</summary>
+        <p class="faq-answer">If your nginx config has a server block listening on port 80 but no return 301 https:// redirect, users who visit via HTTP are never forced to the secure version.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Why should proxy_pass not use localhost?</summary>
+        <p class="faq-answer">Inside Docker, containers communicate by service name, not localhost. Using proxy_pass http://localhost:3000 inside a container means it is trying to reach itself, not the target service.</p>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Does this tool send my config anywhere?</summary>
+        <p class="faq-answer">No. All parsing and analysis runs entirely in your browser. Your nginx or Traefik config is never sent to or stored on any ConfigClarity server.</p>
+      </details>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p class="privacy-note">🔒 We do not store your pasted configs. All processing happens in your browser.</p>
+    <p class="disclaimer-note">ConfigClarity is provided "as is" without warranty. For informational purposes only. Always verify routing and security before production. ConfigClarity accepts no liability for any damages arising from use of this tool.</p>
+  </footer>
+
+  <script>
+  (function () {
+    const SHARED_CONFIG = (function () {
+      try {
+        const p = new URLSearchParams(window.location.search);
+        const v = p.get('config');
+        if (!v) return null;
+        return decodeURIComponent(escape(atob(v.replace(/ /g, '+'))));
+      } catch (_) { return null; }
+    })();
+
+    const SAMPLE_NGINX = `server {
+    listen 80;
+    server_name example.com;
+    location / {
+        proxy_pass http://localhost:3000;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name example.com;
+    ssl_certificate /etc/ssl/cert.pem;
+    location /admin {
+        proxy_pass http://app:8080;
+    }
+    location / {
+        proxy_pass http://app:8080;
+    }
+}`;
+
+    const SAMPLE_TRAEFIK = `services:
+  app:
+    image: myapp
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(\`app.example.com\`)"
+      - "traefik.http.routers.app.entrypoints=websecure"
+  grafana:
+    image: grafana/grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(\`grafana.example.com\`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"`;
+
+    const CONFIG_KEY = 'cc-proxy-config';
+    const configInput = document.getElementById('config-input');
+    const testUrlInput = document.getElementById('test-url');
+    const btnMap = document.getElementById('btn-map');
+    const btnSampleNginx = document.getElementById('btn-sample-nginx');
+    const btnSampleTraefik = document.getElementById('btn-sample-traefik');
+    const placeholder = document.getElementById('placeholder');
+    const resultsEl = document.getElementById('results');
+    const flowDiagram = document.getElementById('flow-diagram');
+    const findingsEl = document.getElementById('audit-findings');
+
+    function saveToStorage() {}
+    function loadFromStorage() {}
+
+    function detectInputType(text) {
+      const t = text.trim();
+      if (/traefik\.(http|tcp)/i.test(t) && (/services\s*:/m.test(t) || /traefik\.enable/i.test(t))) return 'traefik';
+      if (/\bserver\s*\{/.test(t) && (/\blisten\s+\d+/.test(t) || /\blocation\s+/.test(t))) return 'nginx';
+      return null;
+    }
+
+    function extractBraced(str, word) {
+      const out = [];
+      const re = new RegExp(word + '\\s*\\{', 'g');
+      let m;
+      while ((m = re.exec(str)) !== null) {
+        let depth = 1;
+        let i = m.index + m[0].length;
+        while (depth > 0 && i < str.length) {
+          if (str[i] === '{') depth++;
+          else if (str[i] === '}') depth--;
+          i++;
+        }
+        if (depth === 0) out.push(str.slice(m.index + m[0].length, i - 1));
+      }
+      return out;
+    }
+
+    function parseNginx(text) {
+      const servers = [];
+      const serverBlocks = extractBraced(text, 'server');
+      serverBlocks.forEach(function (block) {
+        const listenMatch = block.match(/listen\s+(\d+)(\s+ssl)?\s*;/);
+        const port = listenMatch ? parseInt(listenMatch[1], 10) : 80;
+        const ssl = listenMatch && listenMatch[2];
+        const serverNameMatch = block.match(/server_name\s+([^;]+);/);
+        const serverName = (serverNameMatch ? serverNameMatch[1].trim() : '').split(/\s+/).filter(Boolean);
+        const hasReturn301 = /return\s+301\s+https:\/\//i.test(block);
+        const locations = [];
+        const locRe = /location\s+([^\s{]+)\s*\{/g;
+        let locM;
+        while ((locM = locRe.exec(block)) !== null) {
+          let depth = 1;
+          let j = locM.index + locM[0].length;
+          while (depth > 0 && j < block.length) {
+            if (block[j] === '{') depth++;
+            else if (block[j] === '}') depth--;
+            j++;
+          }
+          const body = block.slice(locM.index + locM[0].length, j - 1);
+          const proxyMatch = body.match(/proxy_pass\s+([^;]+);/);
+          locations.push({
+            path: locM[1].trim(),
+            proxy_pass: proxyMatch ? proxyMatch[1].trim() : null,
+            body
+          });
+        }
+        servers.push({
+          listen: port,
+          ssl: !!ssl,
+          server_name: serverName,
+          hasReturn301,
+          locations,
+          raw: block
+        });
+      });
+      return { type: 'nginx', servers };
+    }
+
+    function parseTraefik(text) {
+      const routers = [];
+      const labelRegex = /["']?(traefik\.[^"'\s]+)=([^"'\n]+)["']?/g;
+      const labels = [];
+      let lm;
+      while ((lm = labelRegex.exec(text)) !== null) {
+        labels.push({ key: lm[1], value: lm[2].replace(/^["']|["']$/g, '').trim() });
+      }
+      const byRouter = {};
+      const byService = {};
+      labels.forEach(function (l) {
+        const r = l.key.match(/traefik\.http\.routers\.([^.]+)\.(.+)/);
+        if (r) {
+          const name = r[1];
+          if (!byRouter[name]) byRouter[name] = { name, rule: '', entrypoints: '', service: '', middlewares: '' };
+          if (r[2] === 'rule') byRouter[name].rule = l.value;
+          if (r[2] === 'entrypoints') byRouter[name].entrypoints = l.value;
+          if (r[2] === 'service') byRouter[name].service = l.value;
+          if (r[2] === 'middlewares') byRouter[name].middlewares = l.value;
+        }
+        const s = l.key.match(/traefik\.http\.services\.([^.]+)/);
+        if (s) byService[s[1]] = true;
+      });
+      Object.keys(byRouter).forEach(function (name) {
+        const r = byRouter[name];
+        let host = '';
+        let pathPrefix = '';
+        let pathRegex = '';
+        const hostMatch = r.rule.match(/Host\(`([^`]+)`\)/);
+        if (hostMatch) host = hostMatch[1];
+        const pathPrefixMatch = r.rule.match(/PathPrefix\(`([^`]*)`\)/);
+        if (pathPrefixMatch) pathPrefix = pathPrefixMatch[1];
+        const pathRegexMatch = r.rule.match(/Path\(`([^`]+)`\)/);
+        if (pathRegexMatch) pathRegex = pathRegexMatch[1];
+        const invalidHost = r.rule.indexOf('Host(') !== -1 && !/Host\(`[^`]+`\)/.test(r.rule.replace(/\\`/g, ''));
+        routers.push({
+          name,
+          service: r.service || name,
+          rule: r.rule,
+          entrypoints: r.entrypoints,
+          middlewares: r.middlewares,
+          host,
+          pathPrefix,
+          pathRegex,
+          invalidHost,
+          hasAuth: /auth|basicauth|forwardauth/i.test(r.middlewares)
+        });
+      });
+      const serviceNames = new Set();
+      const composeServiceRegex = /^\s*([a-zA-Z0-9_-]+)\s*:\s*$/gm;
+      let sm;
+      while ((sm = composeServiceRegex.exec(text)) !== null) serviceNames.add(sm[1]);
+      return { type: 'traefik', routers, serviceNames: Array.from(serviceNames), byRouter };
+    }
+
+    function parseUrl(urlStr) {
+      if (!urlStr || !urlStr.trim()) return null;
+      try {
+        const u = new URL(urlStr.trim().replace(/^\/\//, 'https://'));
+        return { host: u.hostname, path: u.pathname || '/', protocol: u.protocol };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function nginxRules(parsed) {
+      const rules = [];
+      parsed.servers.forEach(function (s, si) {
+        s.locations.forEach(function (loc, li) {
+          const id = 'n-' + si + '-' + li;
+          rules.push({
+            id,
+            title: (s.server_name[0] || '') + ':' + s.listen + ' ' + loc.path,
+            detail: '→ ' + (loc.proxy_pass || '?'),
+            server: s,
+            location: loc,
+            serverName: s.server_name,
+            listen: s.listen,
+            ssl: s.ssl,
+            path: loc.path,
+            proxyPass: loc.proxy_pass
+          });
+        });
+      });
+      return rules;
+    }
+
+    function traefikRules(parsed) {
+      return parsed.routers.map(function (r, i) {
+        const id = 't-' + i;
+        let title = r.name;
+        if (r.host) title += ' Host(' + r.host + ')';
+        if (r.pathPrefix) title += ' PathPrefix(' + r.pathPrefix + ')';
+        if (r.pathRegex) title += ' Path(' + r.pathRegex + ')';
+        return {
+          id,
+          title,
+          detail: 'entrypoints: ' + r.entrypoints + (r.service ? ' → ' + r.service : ''),
+          router: r,
+          host: r.host,
+          pathPrefix: r.pathPrefix,
+          pathRegex: r.pathRegex
+        };
+      });
+    }
+
+    function matchTestUrl(type, parsed, urlParsed) {
+      const reasons = {};
+      if (type === 'nginx') {
+        const rules = nginxRules(parsed);
+        rules.forEach(function (rule) {
+          const hostMatch = rule.serverName.length === 0 || rule.serverName.indexOf(urlParsed.host) !== -1;
+          const path = rule.path.replace(/^\^?|\$$/g, '');
+          const pathMatch = path === '/' ? true : (urlParsed.path === path || urlParsed.path.indexOf(path + '/') === 0);
+          if (!hostMatch) reasons[rule.id] = 'Host doesn\'t match';
+          else if (!pathMatch) reasons[rule.id] = 'Path doesn\'t match';
+        });
+        const sorted = rules.slice().sort(function (a, b) {
+          return (b.path.length) - (a.path.length);
+        });
+        let matched = null;
+        for (let i = 0; i < sorted.length; i++) {
+          const rule = sorted[i];
+          const hostMatch = rule.serverName.length === 0 || rule.serverName.indexOf(urlParsed.host) !== -1;
+          const path = rule.path.replace(/^\^?|\$$/g, '');
+          const pathMatch = path === '/' ? true : (urlParsed.path === path || urlParsed.path.indexOf(path + '/') === 0);
+          if (hostMatch && pathMatch) { matched = rule; break; }
+        }
+        if (matched) reasons[matched.id] = 'Match';
+        return { matchedId: matched ? matched.id : null, reasons };
+      }
+      if (type === 'traefik') {
+        const rules = traefikRules(parsed);
+        let matched = null;
+        rules.forEach(function (rule) {
+          const hostMatch = !rule.host || rule.host === urlParsed.host;
+          let pathMatch = true;
+          if (rule.pathRegex) {
+            try {
+              const re = new RegExp(rule.pathRegex);
+              pathMatch = re.test(urlParsed.path);
+            } catch (e) {
+              pathMatch = false;
+            }
+          }
+          if (pathMatch && rule.pathPrefix !== undefined && rule.pathPrefix !== '')
+            pathMatch = urlParsed.path === rule.pathPrefix || urlParsed.path.indexOf(rule.pathPrefix + '/') === 0 || (rule.pathPrefix === '/' && true);
+          if (hostMatch && pathMatch) matched = rule;
+          if (!hostMatch) reasons[rule.id] = 'Host doesn\'t match';
+          else if (!pathMatch) reasons[rule.id] = 'Path doesn\'t match';
+        });
+        if (matched) reasons[matched.id] = 'Match';
+        return { matchedId: matched ? matched.id : null, reasons };
+      }
+      return { matchedId: null, reasons: {} };
+    }
+
+    function runAudits(type, parsed) {
+      const findings = [];
+      function add(severity, title, detail) {
+        findings.push({ severity, title, detail });
+      }
+
+      if (type === 'nginx') {
+        const servers = parsed.servers;
+        const has80 = servers.some(function (s) { return s.listen === 80; });
+        const hasRedirect = servers.some(function (s) { return s.listen === 80 && s.hasReturn301; });
+        if (has80 && !hasRedirect) {
+          add('warning', 'Missing SSL redirect', 'A server block listens on port 80 but there is no return 301 to https. Consider redirecting HTTP to HTTPS.');
+        }
+        const serverNames = [];
+        servers.forEach(function (s) {
+          s.server_name.forEach(function (sn) {
+            serverNames.push({ name: sn, block: s.listen + (s.ssl ? ' ssl' : '') });
+          });
+        });
+        const seen = {};
+        serverNames.forEach(function (s) {
+          const k = s.name;
+          if (seen[k]) add('info', 'Duplicate server_name', 'server_name "' + k + '" appears in multiple server blocks (' + seen[k] + ' and ' + s.block + ').');
+          else seen[k] = s.block;
+        });
+        servers.forEach(function (s) {
+          s.locations.forEach(function (loc) {
+            if (loc.proxy_pass && /localhost|127\.0\.0\.1/i.test(loc.proxy_pass)) {
+              add('warning', 'proxy_pass to localhost', 'In Docker, use the service name instead of localhost: ' + loc.proxy_pass + ' (e.g. http://app:3000).');
+            }
+          });
+        });
+      }
+
+      if (type === 'traefik') {
+        parsed.routers.forEach(function (r) {
+          if (!parsed.serviceNames || parsed.serviceNames.indexOf(r.service) === -1) {
+            add('critical', 'Dangling Traefik router', 'Router "' + r.name + '" references service "' + r.service + '" but no matching service is defined in the compose file.');
+          }
+          if (r.invalidHost) {
+            add('warning', 'Invalid Host() rule syntax', 'Router "' + r.name + '" has rule "' + r.rule + '". Expected Host(`hostname`) with backticks.');
+          }
+          if (r.pathRegex && r.pathPrefix) {
+            add('info', 'Regex vs prefix priority', 'Router "' + r.name + '" uses both Path and PathPrefix. Traefik evaluates in a defined order; ensure priority is set if needed.');
+          }
+          const adminHosts = ['admin', 'portainer', 'grafana', 'kibana'];
+          const isAdmin = adminHosts.some(function (h) { return r.host && r.host.toLowerCase().indexOf(h) !== -1; });
+          if (isAdmin && !r.hasAuth) {
+            add('warning', 'Missing auth on exposed admin route', 'Router "' + r.name + '" (host: ' + r.host + ') appears to expose an admin dashboard. Consider adding auth middleware (e.g. basicAuth, forwardAuth).');
+          }
+        });
+        const websecure = parsed.routers.filter(function (r) { return r.entrypoints && r.entrypoints.toLowerCase().indexOf('websecure') !== -1; });
+        const web = parsed.routers.filter(function (r) { return r.entrypoints && r.entrypoints.toLowerCase().indexOf('web') !== -1 && r.entrypoints.toLowerCase().indexOf('websecure') === -1; });
+        if (websecure.length > 0 || web.length > 0) {
+          add('info', 'SSL path', 'Routers on entrypoint "websecure" use TLS termination. Routers on "web" (only) are plain HTTP. Passthrough would use a separate entrypoint.');
+        }
+      }
+
+      return findings;
+    }
+
+    function renderFlow(type, parsed, testUrlResult) {
+      flowDiagram.innerHTML = '';
+      const rules = type === 'nginx' ? nginxRules(parsed) : traefikRules(parsed);
+      const matchedId = testUrlResult ? testUrlResult.matchedId : null;
+      const reasons = testUrlResult ? testUrlResult.reasons : {};
+      rules.forEach(function (rule) {
+        const node = document.createElement('div');
+        node.className = 'flow-node ' + (reasons[rule.id] === 'Match' ? 'matched' : 'not-matched');
+        const badge = type === 'nginx' ? 'nginx' : 'Traefik';
+        let reasonText = reasons[rule.id] || (matchedId ? 'Not matched' : '—');
+        if (reasons[rule.id] === 'Match') reasonText = '✓ Matches test URL';
+        node.innerHTML = '<div class="flow-node-title">' + escapeHtml(rule.title) + ' <span class="flow-type-badge">' + badge + '</span></div><div class="flow-node-detail">' + escapeHtml(rule.detail) + (reasonText ? ' · ' + escapeHtml(reasonText) : '') + '</div>';
+        flowDiagram.appendChild(node);
+      });
+      if (rules.length === 0) {
+        flowDiagram.innerHTML = '<p class="audit-ok-msg">No routing rules found. Check that the config is valid nginx or Traefik labels.</p>';
+      }
+    }
+
+    function renderFindings(findings) {
+      findingsEl.innerHTML = '';
+      if (findings.length === 0) {
+        findingsEl.innerHTML = '<p class="audit-ok-msg">No issues flagged. Review the routing flow above.</p>';
+        return;
+      }
+      findings.forEach(function (f) {
+        const card = document.createElement('div');
+        card.className = 'finding-card ' + f.severity;
+        card.innerHTML = '<div class="finding-title">' + escapeHtml(f.title) + '</div><div class="finding-detail">' + escapeHtml(f.detail) + '</div>';
+        findingsEl.appendChild(card);
+      });
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function runMap() {
+      const text = configInput.value.trim();
+      if (!text) {
+        placeholder.style.display = 'block';
+        resultsEl.style.display = 'none';
+        return;
+      }
+      const type = detectInputType(text);
+      if (!type) {
+        placeholder.style.display = 'none';
+        resultsEl.style.display = 'block';
+        flowDiagram.innerHTML = '<p class="finding-detail" style="color:var(--orange)">Could not detect nginx or Traefik config. Paste a full server { } block or docker-compose with traefik.* labels.</p>';
+        findingsEl.innerHTML = '<div class="finding-card warning"><div class="finding-title">Unrecognised config</div><div class="finding-detail">Input does not look like nginx (server { listen; server_name; location }) or Traefik (traefik.http.routers.* labels in compose).</div></div>';
+        return;
+      }
+      let parsed;
+      try {
+        parsed = type === 'nginx' ? parseNginx(text) : parseTraefik(text);
+      } catch (e) {
+        resultsEl.style.display = 'block';
+        flowDiagram.innerHTML = '<p class="finding-detail" style="color:var(--red)">Parse error: ' + escapeHtml(e.message) + '</p>';
+        findingsEl.innerHTML = '';
+        return;
+      }
+      placeholder.style.display = 'none';
+      resultsEl.style.display = 'block';
+      const urlParsed = parseUrl(testUrlInput.value);
+      const testUrlResult = urlParsed ? matchTestUrl(type, parsed, urlParsed) : null;
+      renderFlow(type, parsed, testUrlResult);
+      renderFindings(runAudits(type, parsed));
+    }
+
+    btnMap.addEventListener('click', runMap);
+    btnSampleNginx.addEventListener('click', function () {
+      configInput.value = SAMPLE_NGINX;
+      testUrlInput.value = 'https://example.com/admin';
+      runMap();
+    });
+    btnSampleTraefik.addEventListener('click', function () {
+      configInput.value = SAMPLE_TRAEFIK;
+      testUrlInput.value = 'https://grafana.example.com/';
+      runMap();
+    });
+    document.getElementById('btn-clear').addEventListener('click', function () {
+      configInput.value = '';
+      testUrlInput.value = '';
+      placeholder.style.display = 'block';
+      resultsEl.style.display = 'none';
+      flowDiagram.innerHTML = '';
+      findingsEl.innerHTML = '';
+    });
+    var saveTimer;
+    configInput.addEventListener('input', function () {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () { saveToStorage(); saveTimer = null; }, 500);
+    });
+    function initFromUrl() {
+      if (SHARED_CONFIG) {
+        configInput.value = SHARED_CONFIG;
+        runMap();
+        return;
+      }
+      loadFromStorage();
+    }
+    const btnShareUrl = document.getElementById('btn-share-url');
+    if (btnShareUrl) {
+      btnShareUrl.addEventListener('click', function () {
+        try {
+          const value = configInput.value.trim();
+          const encoded = value ? btoa(unescape(encodeURIComponent(value))) : '';
+          const url = value
+            ? window.location.origin + (location.pathname || '/proxy') + '?config=' + encodeURIComponent(encoded)
+            : window.location.origin + (location.pathname || '/proxy');
+          navigator.clipboard.writeText(url).then(function () {
+            const toast = document.getElementById('share-toast');
+            if (toast) {
+              toast.textContent = 'URL copied to clipboard';
+              toast.hidden = false;
+              if (window._shareToastTimeout) clearTimeout(window._shareToastTimeout);
+              window._shareToastTimeout = setTimeout(function () {
+                toast.hidden = true;
+                window._shareToastTimeout = null;
+              }, 2000);
+            }
+          }).catch(function () {});
+        } catch (e) {}
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initFromUrl);
+    } else {
+      initFromUrl();
+    }
+  })();
+
+    const feedbackBtn = document.getElementById('feedback-btn');
+    const feedbackModal = document.getElementById('feedback-modal');
+    const feedbackModalPanel = document.getElementById('feedback-modal-panel');
+    const feedbackModalClose = document.getElementById('feedback-modal-close');
+    function closeFeedbackModal() {
+      if (feedbackModal) {
+        feedbackModal.classList.remove('visible');
+        feedbackModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (feedbackBtn && feedbackModal) {
+      feedbackBtn.addEventListener('click', function () {
+        feedbackModal.classList.add('visible');
+        feedbackModal.setAttribute('aria-hidden', 'false');
+        feedbackModalClose?.focus();
+      });
+    }
+    if (feedbackModalClose && feedbackModal) {
+      feedbackModalClose.addEventListener('click', closeFeedbackModal);
+    }
+    if (feedbackModal && feedbackModalPanel) {
+      feedbackModal.addEventListener('click', function (e) {
+        if (e.target === feedbackModal) closeFeedbackModal();
+      });
+      feedbackModal.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeFeedbackModal();
+      });
+    }
+  </script>
+  <div id="share-toast" class="share-toast" aria-live="polite" hidden>URL copied to clipboard</div>
+  <button type="button" class="feedback-btn" id="feedback-btn" aria-label="Send feedback">💬 Feedback</button>
+  <div class="feedback-modal-overlay" id="feedback-modal" role="dialog" aria-modal="true" aria-label="Feedback form" aria-hidden="true">
+    <div class="feedback-modal-panel" id="feedback-modal-panel">
+      <button type="button" class="feedback-modal-close" id="feedback-modal-close" aria-label="Close">×</button>
+      <iframe src="https://tally.so/embed/Y5Zx15" title="Feedback form" width="480" height="400"></iframe>
+    </div>
+  </div>
+<div style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;" aria-hidden="true">
+  Reverse Proxy Flow Mapper — free online nginx and Traefik audit tool. Paste nginx.conf or
+  docker-compose with Traefik labels and instantly visualise your routing configuration.
+  Test which nginx location block or Traefik router rule matches a given URL. Detect dangling
+  Traefik routers, missing HTTP to HTTPS redirects, proxy_pass to localhost inside Docker,
+  and exposed admin dashboards without authentication middleware. Free nginx config checker
+  and Traefik validator with no signup required. All processing is client-side.
+</div>
+</body>
+</html>

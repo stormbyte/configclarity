@@ -1,0 +1,8 @@
+{
+  "redirects": [],
+  "rewrites": [
+    { "source": "/", "destination": "/home/index.html" },
+    { "source": "/crontab", "destination": "/index.html" },
+    { "source": "/crontab/", "destination": "/index.html" }
+  ]
+}

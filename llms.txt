@@ -1,0 +1,27 @@
+# ConfigClarity
+> Free browser-based sysadmin audit tools. No signup. No backend. Everything runs in your browser.
+
+## Tools
+
+### Cron Job Overlap Checker & Visualiser
+URL: https://configclarity.dev/
+Build cron expressions visually or paste a full crontab. Detects job overlaps on a 24-hour timeline. Useful for sysadmins and homelab users managing multiple scheduled tasks.
+
+### SSL Certificate Expiry Checker
+URL: https://configclarity.dev/ssl
+Paste multiple domains and check SSL certificate expiry in bulk. Color-coded status, wildcard detection, CDN domain warnings.
+
+### Docker Compose Auditor
+URL: https://configclarity.dev/docker
+Paste a docker-compose.yml file and audit for missing healthchecks, hardcoded secrets, port collisions, and insecure 0.0.0.0 bindings.
+
+### UFW Firewall Auditor
+URL: https://configclarity.dev/firewall
+Paste output of sudo ufw status verbose and audit for high-risk open ports, missing default-deny, conflicting rules, IPv4/IPv6 mismatches, and overly broad CIDR ranges.
+
+### Reverse Proxy Flow Mapper
+URL: https://configclarity.dev/proxy
+Paste nginx.conf or a docker-compose.yml with Traefik labels. Visualises routing decisions, detects dangling routers, missing SSL redirects, and exposed admin routes.
+
+## Technology
+Client-side only. No data is stored or transmitted. Built with vanilla HTML, CSS, and JavaScript.
