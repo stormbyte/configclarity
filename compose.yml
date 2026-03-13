@@ -1,0 +1,7 @@
+services:
+  app:
+    image: local/configclarity
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: ./.docker/nginx/Dockerfile
